@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SVG Floor Plan – Snapping + Size Editor Panel</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 1rem;
+      box-sizing: border-box;
+    }
+    #controls {
+      margin-bottom: 0.5rem;
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    #sizeEditor {
+      display: none;
+      margin-bottom: 0.5rem;
+      padding: 0.5rem;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background: #f9f9f9;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    #sizeEditor label {
+      font-size: 0.9rem;
+    }
+    #sizeEditor input {
+      width: 4.5rem;
+      padding: 0.2rem 0.3rem;
+      font-size: 0.9rem;
+    }
+    #sizeEditor button {
+      padding: 0.3rem 0.7rem;
+      font-size: 0.85rem;
+    }
+    #floorplan {
+      border: 1px solid #ccc;
+      touch-action: none; /* important for finger drag */
+      max-width: 100%;
+    }
+    button {
+      padding: 0.4rem 0.8rem;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <button id="toggleJoinBtn">Join: OFF</button>
+    <button id="addRectBtn">Add Room</button>
+  </div>
+
+  <!-- Size editor panel -->
+  <div id="sizeEditor">
+    <span>Edit room size:</span>
+    <label>
+      W (m)
+      <input id="widthInput" type="number" step="0.1" min="0.1">
+    </label>
+    <label>
+      H (m)
+      <input id="heightInput" type="number" step="0.1" min="0.1">
+    </label>
+    <button id="applySizeBtn">Apply</button>
+    <button id="cancelSizeBtn">Cancel</button>
+  </div>
+
+  <svg id="floorplan" width="800" height="500" viewBox="0 0 800 500">
+    <!-- Rooms will be added here -->
+  </svg>
+
+  <script>
+    const svg = document.getElementById("floorplan");
+    const toggleJoinBtn = document.getElementById("toggleJoinBtn");
+    const addRectBtn = document.getElementById("addRectBtn");
+
+    const sizeEditor = document.getElementById("sizeEditor");
+    const widthInput = document.getElementById("widthInput");
+    const heightInput = document.getElementById("heightInput");
+    const applySizeBtn = document.getElementById("applySizeBtn");
+    const cancelSizeBtn = document.getElementById("cancelSizeBtn");
+
+    // Scale: metres per pixel (for labels)
+    const SCALE_M_PER_PX = 0.1;
+
+    // How close edges need to be to snap (in pixels)
+    const SNAP_DISTANCE = 20;
+
+    let joinedMode = false;
+
+    let currentRect = null;
+    let dragMode = null; // "move" or "resize"
+    let startPointer = null;
+    let startRect = null;
+
+    let startPositions = []; // for joined move
+    let activePointerId = null;
+    let nextRoomId = 1;
+
+    // Which room is being edited in the size panel
+    let editingRoomId = null;
+
+    // SVG point for coordinate conversion
+    const pt = svg.createSVGPoint();
+    function getPointerPosition(evt) {
+      pt.x = evt.clientX;
+      pt.y = evt.clientY;
+      return pt.matrixTransform(svg.getScreenCTM().inverse());
+    }
+
+    function formatSizeLabel(widthPx, heightPx) {
+      const wM = widthPx * SCALE_M_PER_PX;
+      const hM = heightPx * SCALE_M_PER_PX;
+      return `${wM.toFixed(2)}m × ${hM.toFixed(2)}m`;
+    }
+
+    // --------- SIZE EDITOR PANEL ---------
+    function openSizeEditorForRoom(roomId) {
+      const rect = svg.querySelector(`rect[data-room="${roomId}"]`);
+      if (!rect) return;
+
+      const wPx = parseFloat(rect.getAttribute("width"));
+      const hPx = parseFloat(rect.getAttribute("height"));
+      const wM = wPx * SCALE_M_PER_PX;
+      const hM = hPx * SCALE_M_PER_PX;
+
+      editingRoomId = roomId;
+      widthInput.value = wM.toFixed(2);
+      heightInput.value = hM.toFixed(2);
+
+      sizeEditor.style.display = "flex";
+      widthInput.focus();
+      widthInput.select();
+    }
+
+    function closeSizeEditor() {
+      sizeEditor.style.display = "none";
+      editingRoomId = null;
+    }
+
+    applySizeBtn.addEventListener("click", () => {
+      if (!editingRoomId) return;
+      const rect = svg.querySelector(`rect[data-room="${editingRoomId}"]`);
+      if (!rect) {
+        closeSizeEditor();
+        return;
+      }
+
+      const newWm = parseFloat(widthInput.value);
+      const newHm = parseFloat(heightInput.value);
+      if (!isFinite(newWm) || !isFinite(newHm) || newWm <= 0 || newHm <= 0) {
+        return;
+      }
+
+      const newWpx = newWm / SCALE_M_PER_PX;
+      const newHpx = newHm / SCALE_M_PER_PX;
+
+      rect.setAttribute("width", newWpx);
+      rect.setAttribute("height", newHpx);
+      updateRoomLabel(rect);
+      closeSizeEditor();
+    });
+
+    cancelSizeBtn.addEventListener("click", () => {
+      closeSizeEditor();
+    });
+
+    // --------- LABEL + ROOM HANDLING ---------
+    function updateRoomLabel(rect) {
+      const id = rect.dataset.room;
+      const label = svg.querySelector(`text[data-room="${id}"]`);
+      if (!label) return;
+
+      const x = parseFloat(rect.getAttribute("x"));
+      const y = parseFloat(rect.getAttribute("y"));
+      const w = parseFloat(rect.getAttribute("width"));
+      const h = parseFloat(rect.getAttribute("height"));
+
+      label.setAttribute("x", x + w / 2);
+      label.setAttribute("y", y + h / 2);
+      label.textContent = formatSizeLabel(w, h);
+    }
+
+    function createRoom(x, y, w, h) {
+      const id = String(nextRoomId++);
+
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", x);
+      rect.setAttribute("y", y);
+      rect.setAttribute("width", w);
+      rect.setAttribute("height", h);
+      rect.setAttribute("fill", "rgba(0,0,0,0)");
+      rect.setAttribute("stroke", "black");
+      rect.setAttribute("stroke-width", "3");
+      rect.setAttribute("pointer-events", "bounding-box");
+      rect.dataset.room = id;
+
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.dataset.room = id;
+      text.setAttribute("text-anchor", "middle");
+      text.setAttribute("dominant-baseline", "middle");
+      text.setAttribute("font-size", "14");
+      text.setAttribute("fill", "black");
+      text.setAttribute("pointer-events", "auto"); // to receive taps
+      text.style.cursor = "text";
+
+      // Tap/click on label opens editor
+      text.addEventListener("click", (e) => {
+        openSizeEditorForRoom(id);
+        e.stopPropagation();
+        e.preventDefault();
+      });
+
+      // Block drag start from label
+      text.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+      });
+
+      svg.appendChild(rect);
+      svg.appendChild(text);
+
+      updateRoomLabel(rect);
+    }
+
+    // Initial rooms
+    createRoom(50, 50, 120, 80);
+    createRoom(250, 100, 150, 100);
+
+    toggleJoinBtn.addEventListener("click", () => {
+      joinedMode = !joinedMode;
+      toggleJoinBtn.textContent = "Join: " + (joinedMode ? "ON" : "OFF");
+    });
+
+    addRectBtn.addEventListener("click", () => {
+      createRoom(100, 100, 120, 80);
+    });
+
+    // --------- SNAPPING LOGIC ---------
+    function applySnapping(rect, proposedX, proposedY) {
+      const w = parseFloat(rect.getAttribute("width"));
+      const h = parseFloat(rect.getAttribute("height"));
+
+      let snappedX = proposedX;
+      let snappedY = proposedY;
+
+      const currLeft   = proposedX;
+      const currRight  = proposedX + w;
+      const currTop    = proposedY;
+      const currBottom = proposedY + h;
+
+      const allRects = Array.from(svg.querySelectorAll("rect[data-room]"));
+
+      allRects.forEach(other => {
+        if (other === rect) return;
+
+        const ox = parseFloat(other.getAttribute("x"));
+        const oy = parseFloat(other.getAttribute("y"));
+        const ow = parseFloat(other.getAttribute("width"));
+        const oh = parseFloat(other.getAttribute("height"));
+
+        const oLeft   = ox;
+        const oRight  = ox + ow;
+        const oTop    = oy;
+        const oBottom = oy + oh;
+
+        // Check vertical overlap for left/right snapping
+        const verticalOverlap = Math.min(currBottom, oBottom) - Math.max(currTop, oTop);
+        if (verticalOverlap > 0) {
+          // Snap current left to other's right
+          if (Math.abs(currLeft - oRight) <= SNAP_DISTANCE) {
+            snappedX = oRight;
+          }
+          // Snap current right to other's left
+          if (Math.abs(currRight - oLeft) <= SNAP_DISTANCE) {
+            snappedX = oLeft - w;
+          }
+        }
+
+        // Check horizontal overlap for top/bottom snapping
+        const horizontalOverlap = Math.min(currRight, oRight) - Math.max(currLeft, oLeft);
+        if (horizontalOverlap > 0) {
+          // Snap current top to other's bottom
+          if (Math.abs(currTop - oBottom) <= SNAP_DISTANCE) {
+            snappedY = oBottom;
+          }
+          // Snap current bottom to other's top
+          if (Math.abs(currBottom - oTop) <= SNAP_DISTANCE) {
+            snappedY = oTop - h;
+          }
+        }
+      });
+
+      return { x: snappedX, y: snappedY };
+    }
+
+    // --------- POINTER INTERACTION ---------
+    svg.addEventListener("pointerdown", (evt) => {
+      // If we're tapping the label, it is handled there
+      let target = evt.target;
+      if (target.tagName === "text" && target.dataset.room) {
+        return;
+      }
+
+      if (!target || target.tagName !== "rect") return;
+
+      const pos = getPointerPosition(evt);
+
+      currentRect = target;
+      startPointer = pos;
+
+      const x = parseFloat(target.getAttribute("x"));
+      const y = parseFloat(target.getAttribute("y"));
+      const w = parseFloat(target.getAttribute("width"));
+      const h = parseFloat(target.getAttribute("height"));
+
+      startRect = { x, y, w, h };
+
+      // Decide move vs resize based on pointer position
+      const margin = 30; // biggish corner zone
+      const nearRight  = pos.x > x + w - margin && pos.x < x + w + margin;
+      const nearBottom = pos.y > y + h - margin && pos.y < y + h + margin;
+
+      dragMode = (nearRight || nearBottom) ? "resize" : "move";
+
+      if (joinedMode && dragMode === "move") {
+        // Capture positions of all rooms
+        startPositions = Array.from(svg.querySelectorAll("rect[data-room]")).map(r => ({
+          element: r,
+          x: parseFloat(r.getAttribute("x")),
+          y: parseFloat(r.getAttribute("y"))
+        }));
+      }
+
+      activePointerId = evt.pointerId;
+      svg.setPointerCapture(activePointerId);
+      evt.preventDefault();
+    });
+
+    svg.addEventListener("pointermove", (evt) => {
+      if (!currentRect || !dragMode) return;
+      if (activePointerId !== null && evt.pointerId !== activePointerId) return;
+
+      const pos = getPointerPosition(evt);
+      const dx = pos.x - startPointer.x;
+      const dy = pos.y - startPointer.y;
+
+      if (dragMode === "move") {
+        if (joinedMode) {
+          // Move all rooms as a block (no snapping here)
+          startPositions.forEach(item => {
+            item.element.setAttribute("x", item.x + dx);
+            item.element.setAttribute("y", item.y + dy);
+            updateRoomLabel(item.element);
+          });
+        } else {
+          // Move one room with snapping
+          const proposedX = startRect.x + dx;
+          const proposedY = startRect.y + dy;
+          const snapped = applySnapping(currentRect, proposedX, proposedY);
+          currentRect.setAttribute("x", snapped.x);
+          currentRect.setAttribute("y", snapped.y);
+          updateRoomLabel(currentRect);
+        }
+      } else if (dragMode === "resize") {
+        let newW = startRect.w + dx;
+        let newH = startRect.h + dy;
+        const minSize = 30;
+        if (newW < minSize) newW = minSize;
+        if (newH < minSize) newH = minSize;
+        currentRect.setAttribute("width", newW);
+        currentRect.setAttribute("height", newH);
+        updateRoomLabel(currentRect);
+      }
+
+      evt.preventDefault();
+    });
+
+    function endPointer(evt) {
+      if (activePointerId !== null && evt.pointerId !== activePointerId) return;
+      if (activePointerId !== null) {
+        try {
+          svg.releasePointerCapture(activePointerId);
+        } catch (e) {}
+      }
+      currentRect = null;
+      dragMode = null;
+      startPointer = null;
+      startRect = null;
+      startPositions = [];
+      activePointerId = null;
+    }
+
+    svg.addEventListener("pointerup", endPointer);
+    svg.addEventListener("pointercancel", endPointer);
+  </script>
+</body>
+</html>
