@@ -290,7 +290,12 @@ function rebuildWallsView() {
   }
 
   mergedSegments.forEach(seg => {
-    const wallWidthPx = seg.end - seg.start;
+    const t = getMaterialThicknessMm();
+    const wallWidthPx = (seg.end - seg.start) + (isFinite(t) && t > 0 ? t : 0);
+
+
+
+
     if (wallWidthPx < 1) return;
 
     const wallKey = [

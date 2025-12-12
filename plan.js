@@ -1035,12 +1035,12 @@ window.addEventListener("DOMContentLoaded", () => {
   rebuildWallsView();
 
   // 6) Wire the download button
-  const downloadBtn = document.getElementById("downloadSheetsBtn");
-  if (downloadBtn) {
-    downloadBtn.addEventListener("click", () => {
-      window.downloadAllSheetsAsSvg();
-    });
-  }
+ // const downloadBtn = document.getElementById("downloadSheetsBtn");
+  //if (downloadBtn) {
+    //downloadBtn.addEventListener("click", () => {
+     // window.downloadAllSheetsAsSvg();
+   // });
+  ///}
 
   // OPTIONAL: If no saved floorplan existed, create starter rooms here.
   // if (!loaded) {
