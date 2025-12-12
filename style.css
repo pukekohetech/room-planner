@@ -1,0 +1,306 @@
+/* ===== LAYOUT ===== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin: 0;
+  padding: 0.75rem;
+  background: #fafafa;
+}
+
+/* App: sidebar on the left, main content on the right */
+#app {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+/* Sidebar: fixed-ish width, scroll if tall */
+#sidebar {
+  width: 260px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Main area: plan + walls */
+#main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Small screens: stack sidebar on top */
+@media (max-width: 800px) {
+  #app {
+    flex-direction: column;
+  }
+  #sidebar {
+    width: 100%;
+  }
+}
+
+/* ===== CONTROLS & BUTTONS ===== */
+
+#controls {
+  padding: 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+#controls button {
+  width: 100%;
+}
+
+.scale-label {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin-top: 0.25rem;
+}
+
+button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-radius: 4px;
+  border: 1px solid #bbb;
+  background: #f0f0f0;
+}
+
+button:hover {
+  background: #e6e6e6;
+}
+
+.tool-active {
+  background: #def;
+  border-color: #8af;
+}
+
+.danger-btn {
+  background: #fdd;
+  border-color: #f99;
+}
+
+.danger-btn:hover {
+  background: #fbb;
+}
+
+/* ===== EDITOR PANELS ===== */
+
+#sizeEditor,
+#featureInfo {
+  display: none;              /* JS toggles to flex when needed */
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  align-items: flex-start;
+  gap: 0.4rem;
+  flex-direction: column;
+  font-size: 0.9rem;
+}
+
+#sizeEditor {
+  background: #f9f9f9;
+}
+
+#featureInfo {
+  background: #eef8ff;
+}
+
+.panel-title {
+  font-weight: 600;
+}
+
+#sizeEditor label,
+#featureInfo label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+}
+
+#sizeEditor input,
+#featureInfo input {
+  padding: 0.2rem 0.3rem;
+  font-size: 0.9rem;
+  margin-top: 0.15rem;
+}
+
+/* Room name a bit wider */
+#roomNameInput {
+  width: 100%;
+}
+
+/* Number inputs */
+#widthInput,
+#heightInput,
+#featureWidthInput,
+#featureOffsetInput,
+#featureHeadInput {
+  width: 4.5rem;
+}
+
+/* Panel buttons aligned horizontally */
+.panel-buttons {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+/* ===== WALLS HINT ===== */
+
+#wallsHint {
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed #ccc;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 0.85rem;
+}
+
+#wallsHint .hint {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+/* ===== SCROLLABLE WRAPPERS AROUND SVGs ===== */
+
+#floorplanWrapper,
+#wallsWrapper {
+  width: 100%;
+  max-height: 420px;      /* one laser sheet high */
+  overflow-y: auto;       /* allow vertical scrolling for extra sheets */
+  overflow-x: auto;       /* optional: scroll if something is wider */
+  border: 1px solid #ccc; /* optional: visual boundary */
+}
+
+
+/* Plan wrapper: big, scrolls if needed */
+#floorplanWrapper {
+  max-height: 60vh;
+  border: 1px solid #ccc;
+  background: #fff;
+  margin-bottom: 0.75rem;
+}
+
+/* Walls wrapper: fixed to laser-bed height */
+#wallsWrapper {
+  height: 420px;       /* matches SVG height */
+  border: 1px solid #f88;
+  background: #fffafa;
+}
+
+/* ===== PLAN SVG ===== */
+
+#floorplan {
+  max-width: none;             /* allow wider than viewport */
+  touch-action: pan-x pan-y;   /* allow scrolling and pointer drags */
+  cursor: default;
+}
+
+/* ===== WALL ELEVATION SECTION ===== */
+
+#wallsPanel {
+  margin-top: 0.25rem;
+}
+
+#wallsControls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.9rem;
+}
+
+#wallsControls input {
+  width: 4rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.85rem;
+}
+
+#wallsSvg {
+  max-width: none;
+}
+
+/* ===== WALL / FLOOR ENABLE / DISABLE STYLE ===== */
+/* Walls: red outline only */
+/* ALL WALLS: red outline, no fill */
+.wall-strip {
+  fill: none !important;
+  stroke: rgb(255,0,0) !important;
+  stroke-width: 1 !important;
+}
+
+/* Disabled walls (faded) */
+.wall-strip.disabled {
+  opacity: 0.3 !important;
+  stroke-dasharray: 6 4;
+}
+
+/* ALL FLOORS: red outline, no fill */
+.floor-strip {
+  fill: none !important;
+  stroke: rgb(255,0,0) !important;
+  stroke-width: 1 !important;
+}
+
+/* Disabled floors */
+.floor-strip.disabled {
+  opacity: 0.3 !important;
+  stroke-dasharray: 6 4;
+}
+
+
+
+/* Labels for walls & floors: blue, centred */
+.wall-label,
+.floor-label {
+  fill: blue;
+  font-size: 8px;
+}
+
+.wall-label.disabled,
+.floor-label.disabled {
+  opacity: 0.3;
+}
+
+/* ===== Optional scroll bar styling (desktop only) ===== */
+
+#floorplanWrapper::-webkit-scrollbar,
+#wallsWrapper::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+#floorplanWrapper::-webkit-scrollbar-track,
+#wallsWrapper::-webkit-scrollbar-track {
+  background: #f0f0f0;
+}
+
+#floorplanWrapper::-webkit-scrollbar-thumb,
+#wallsWrapper::-webkit-scrollbar-thumb {
+  background: #c0c0c0;
+  border-radius: 4px;
+}
+
+/* Wall & Floor Label Styling */
+.wall-label,
+.floor-label {
+  font-size: 4px;              /* reduce text size */
+  font-family: Arial, sans-serif;
+  fill: rgb(0,0,255);           /* label color (blue) */
+  pointer-events: none;         /* prevents clicking text instead of wall */
+}
+
+.wall-label tspan,
+.floor-label tspan {
+  font-size: 8px;
+}
+
