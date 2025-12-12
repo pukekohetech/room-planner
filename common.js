@@ -2,7 +2,7 @@
 // COMMON: DOM lookups, constants, shared state & helpers
 // ==========================================================
 // Remember last configuration in this browser
-const STORAGE_KEY = "floorplanConfig_v1";
+const STORAGE_KEY = "floorplanConfig_v2";
 
 
 const svg = document.getElementById("floorplan");
@@ -199,5 +199,6 @@ function installFeatureAutoSaveObserver() {
     ]
   });
 }
+
 
 
