@@ -1,201 +1,305 @@
-// ==========================================================
-// COMMON: DOM lookups, constants, shared state & helpers
-// ==========================================================
-// Remember last configuration in this browser
-const STORAGE_KEY = "floorplanConfig_v1";
+/* ===== LAYOUT ===== */
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
-const svg = document.getElementById("floorplan");
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin: 0;
+  padding: 0.75rem;
+  background: #fafafa;
+}
 
-// Toolbar buttons
-// Toolbar buttons
-const toggleJoinBtn       = document.getElementById("toggleJoinBtn");
-const addRectBtn          = document.getElementById("addRectBtn");
-const addDoorBtn          = document.getElementById("addDoorBtn");
-const addWindowBtn        = document.getElementById("addWindowBtn");
-const downloadSheetsBtn   = document.getElementById("downloadSheetsBtn");
+/* App: sidebar on the left, main content on the right */
+#app {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
 
+/* Sidebar: fixed-ish width, scroll if tall */
+#sidebar {
+  width: 260px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
 
-// Room editor
-const sizeEditor      = document.getElementById("sizeEditor");
-const roomNameInput   = document.getElementById("roomNameInput");
-const widthInput      = document.getElementById("widthInput");
-const heightInput     = document.getElementById("heightInput");
-const applySizeBtn    = document.getElementById("applySizeBtn");
-const cancelSizeBtn   = document.getElementById("cancelSizeBtn");
-const deleteRoomBtn   = document.getElementById("deleteRoomBtn");
+/* Main area: plan + walls */
+#main {
+  flex: 1;
+  min-width: 0;
+}
 
+/* Small screens: stack sidebar on top */
+@media (max-width: 800px) {
+  #app {
+    flex-direction: column;
+  }
+  #sidebar {
+    width: 100%;
+  }
+}
 
-// Feature editor
-const featureInfo        = document.getElementById("featureInfo");
-const featureTypeLabel   = document.getElementById("featureTypeLabel");
-const featureWidthInput  = document.getElementById("featureWidthInput");
-const featureOffsetInput = document.getElementById("featureOffsetInput");
-const featureHeadInput   = document.getElementById("featureHeadInput");
-const deleteFeatureBtn   = document.getElementById("deleteFeatureBtn");
+/* ===== CONTROLS & BUTTONS ===== */
 
-// Walls view
-const wallsSvg             = document.getElementById("wallsSvg");
-const wallHeightInput      = document.getElementById("wallHeightInput");
-const materialThicknessInput = document.getElementById("materialThicknessInput");
+#controls {
+  padding: 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
 
-// ---------- CONSTANTS ----------
-const SCALE_M_PER_PX = 0.2 / 5;
-const SNAP_DISTANCE  = 20;
-const LASER_WIDTH    = 730;
-const LASER_HEIGHT   = 420;
+#controls button {
+  width: 100%;
+}
 
-const DOOR_HEIGHT_M          = 2.0;
-const WINDOW_HEAD_DEFAULT_M   = 2.0;
-const WINDOW_HEIGHT_DEFAULT_M = 1.0;
+.scale-label {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin-top: 0.25rem;
+}
 
-// Turn joints on/off in one place if needed
-const ENABLE_FINGER_JOINTS = true;
+button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-radius: 4px;
+  border: 1px solid #bbb;
+  background: #f0f0f0;
+}
 
-let wallHeightM = parseFloat(wallHeightInput.value) || 2.4;
+button:hover {
+  background: #e6e6e6;
+}
 
-// ---------- STATE ----------
-let joinedMode    = false;
-let draggingRoom  = null;
-let dragMode      = null;
-let startPointer  = null;
-let startRect     = null;
-let startPositions= [];
+.tool-active {
+  background: #def;
+  border-color: #8af;
+}
 
-let nextRoomId    = 1;
-let nextFeatureId = 1;
+.danger-btn {
+  background: #fdd;
+  border-color: #f99;
+}
 
-let currentTool   = "select"; // "select" | "addDoor" | "addWindow"
-let editingRoomId = null;
+.danger-btn:hover {
+  background: #fbb;
+}
 
-let selectedFeature   = null;
-let featureHandleStart= null;
-let featureHandleEnd  = null;
+/* ===== EDITOR PANELS ===== */
 
-const pt = svg.createSVGPoint();
+#sizeEditor,
+#featureInfo {
+  display: none;              /* JS toggles to flex when needed */
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  align-items: flex-start;
+  gap: 0.4rem;
+  flex-direction: column;
+  font-size: 0.9rem;
+}
 
-let wallVisibility  = new Map(); // wallKey => bool
-let floorVisibility = new Map(); // roomId  => bool;
+#sizeEditor {
+  background: #f9f9f9;
+}
 
-let currentStudentName = ""; // set from UI input
+#featureInfo {
+  background: #eef8ff;
+}
 
+.panel-title {
+  font-weight: 600;
+}
 
+#sizeEditor label,
+#featureInfo label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+}
 
-// ---------- SHARED HELPERS ----------
+#sizeEditor input,
+#featureInfo input {
+  padding: 0.2rem 0.3rem;
+  font-size: 0.9rem;
+  margin-top: 0.15rem;
+}
 
-function setStudentName(name) {
-  currentStudentName = String(name || "").trim();
-  saveLaserVisibility(); // reuse saving (we'll extend payload below)
-  rebuildWallsView();
+/* Room name a bit wider */
+#roomNameInput {
+  width: 100%;
+}
+
+/* Number inputs */
+#widthInput,
+#heightInput,
+#featureWidthInput,
+#featureOffsetInput,
+#featureHeadInput {
+  width: 4.5rem;
+}
+
+/* Panel buttons aligned horizontally */
+.panel-buttons {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+/* ===== WALLS HINT ===== */
+
+#wallsHint {
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed #ccc;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 0.85rem;
+}
+
+#wallsHint .hint {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+/* ===== SCROLLABLE WRAPPERS AROUND SVGs ===== */
+
+#floorplanWrapper,
+#wallsWrapper {
+  width: 100%;
+  max-height: 420px;      /* one laser sheet high */
+  overflow-y: auto;       /* allow vertical scrolling for extra sheets */
+  overflow-x: auto;       /* optional: scroll if something is wider */
+  border: 1px solid #ccc; /* optional: visual boundary */
 }
 
 
-function getMaterialThicknessMm() {
-  let t = parseFloat(materialThicknessInput?.value);
-  if (!isFinite(t) || t < 0) t = 0;   // 0mm => no joints
-  return t;
+/* Plan wrapper: big, scrolls if needed */
+#floorplanWrapper {
+  max-height: 60vh;
+  border: 1px solid #ccc;
+  background: #fff;
+  margin-bottom: 0.75rem;
 }
 
-function getPointerPosition(evt) {
-  pt.x = evt.clientX;
-  pt.y = evt.clientY;
-  return pt.matrixTransform(svg.getScreenCTM().inverse());
+/* Walls wrapper: fixed to laser-bed height */
+#wallsWrapper {
+  height: 420px;       /* matches SVG height */
+  border: 1px solid #f88;
+  background: #fffafa;
 }
 
-function formatSizeLabel(wPx, hPx) {
-  const wM = wPx * SCALE_M_PER_PX;
-  const hM = hPx * SCALE_M_PER_PX;
-  return `${wM.toFixed(2)}m × ${hM.toFixed(2)}m`;
+/* ===== PLAN SVG ===== */
+
+#floorplan {
+  max-width: none;             /* allow wider than viewport */
+  touch-action: pan-x pan-y;   /* allow scrolling and pointer drags */
+  cursor: default;
 }
 
-function getRoomForFeature(feature) {
-  const roomId = feature.dataset.room;
-  return svg.querySelector(`rect[data-room="${roomId}"]:not([data-feature])`);
+/* ===== WALL ELEVATION SECTION ===== */
+
+#wallsPanel {
+  margin-top: 0.25rem;
 }
 
-function getFeatureThickness(feature) {
-  return feature.dataset.feature === "door" ? 6 : 4;
+#wallsControls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.9rem;
 }
 
-function getRoomDisplayName(roomId) {
-  const rect = svg.querySelector(`rect[data-room="${roomId}"]:not([data-feature])`);
-  if (!rect) return `Room ${roomId}`;
-  return rect.dataset.roomName || `Room ${roomId}`;
+#wallsControls input {
+  width: 4rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.85rem;
 }
 
-function attachRoomLabelEvents(textElement, roomId) {
-  const openEditor = (e) => {
-    openSizeEditorForRoom(roomId);
-    e.stopPropagation();
-    e.preventDefault();
-  };
+#wallsSvg {
+  max-width: none;
+}
 
-  textElement.addEventListener("click", openEditor);
-  textElement.addEventListener("pointerup", openEditor);
-  textElement.addEventListener("touchend", openEditor);
+/* ===== WALL / FLOOR ENABLE / DISABLE STYLE ===== */
+/* Walls: red outline only */
+/* ALL WALLS: red outline, no fill */
+.wall-strip {
+  fill: none !important;
+  stroke: rgb(255,0,0) !important;
+  stroke-width: 1 !important;
+}
+
+/* Disabled walls (faded) */
+.wall-strip.disabled {
+  opacity: 0.3 !important;
+  stroke-dasharray: 6 4;
+}
+
+/* ALL FLOORS: red outline, no fill */
+.floor-strip {
+  fill: none !important;
+  stroke: rgb(255,0,0) !important;
+  stroke-width: 1 !important;
+}
+
+/* Disabled floors */
+.floor-strip.disabled {
+  opacity: 0.3 !important;
+  stroke-dasharray: 6 4;
 }
 
 
-let _saveTimer = null;
 
-function requestAutoSave(reason) {
-  // Debounce so dragging/resizing doesn’t spam localStorage
-  if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(() => {
-    try {
-      saveLaserVisibility(); // visibility + student name
-      // If you ALSO have a room layout saver (rooms/features positions), call it here too:
-      // saveRoomLayoutToLocalStorage();
-    } catch (e) {
-      console.warn("AutoSave failed", e);
-    }
-  }, 150);
+/* Labels for walls & floors: blue, centred */
+.wall-label,
+.floor-label {
+  fill: blue;
+  font-size: 8px;
 }
 
-// Watches for changes to rooms/features in the main svg
-function installFeatureAutoSaveObserver() {
-  if (!svg) return;
+.wall-label.disabled,
+.floor-label.disabled {
+  opacity: 0.3;
+}
 
-  const obs = new MutationObserver((mutations) => {
-    for (const m of mutations) {
-      // added/removed feature nodes
-      if (m.type === "childList") {
-        const added = Array.from(m.addedNodes || []);
-        const removed = Array.from(m.removedNodes || []);
-        const touched = [...added, ...removed].some(n =>
-          n && n.nodeType === 1 && (
-            n.matches?.("rect[data-feature]") ||
-            n.querySelector?.("rect[data-feature]") ||
-            n.matches?.("rect[data-room]") ||
-            n.querySelector?.("rect[data-room]")
-          )
-        );
-        if (touched) {
-          requestAutoSave("feature add/remove");
-          return;
-        }
-      }
+/* ===== Optional scroll bar styling (desktop only) ===== */
 
-      // attribute changes on feature nodes (offset/length/etc)
-      if (m.type === "attributes") {
-        const el = m.target;
-        if (el && el.nodeType === 1 && el.matches?.("rect[data-feature], rect[data-room]")) {
-          requestAutoSave("feature attr change");
-          return;
-        }
-      }
-    }
-  });
+#floorplanWrapper::-webkit-scrollbar,
+#wallsWrapper::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
 
-  obs.observe(svg, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: [
-      "x", "y", "width", "height",
-      "data-wallOffsetPx", "data-lengthPx",
-      "data-windowHeadM", "data-side",
-      "data-room", "data-feature"
-    ]
-  });
+#floorplanWrapper::-webkit-scrollbar-track,
+#wallsWrapper::-webkit-scrollbar-track {
+  background: #f0f0f0;
+}
+
+#floorplanWrapper::-webkit-scrollbar-thumb,
+#wallsWrapper::-webkit-scrollbar-thumb {
+  background: #c0c0c0;
+  border-radius: 4px;
+}
+
+/* Wall & Floor Label Styling */
+.wall-label,
+.floor-label {
+  font-size: 4px;              /* reduce text size */
+  font-family: Arial, sans-serif;
+  fill: rgb(0,0,255);           /* label color (blue) */
+  pointer-events: none;         /* prevents clicking text instead of wall */
+}
+
+.wall-label tspan,
+.floor-label tspan {
+  font-size: 8px;
 }
