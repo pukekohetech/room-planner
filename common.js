@@ -40,7 +40,7 @@ const wallHeightInput      = document.getElementById("wallHeightInput");
 const materialThicknessInput = document.getElementById("materialThicknessInput");
 
 // ---------- CONSTANTS ----------
-const SCALE_M_PER_PX = 0.2 / 10;
+const SCALE_M_PER_PX = 0.2 / 2;
 const SNAP_DISTANCE  = 20;
 const LASER_WIDTH    = 730;
 const LASER_HEIGHT   = 420;
@@ -199,4 +199,5 @@ function installFeatureAutoSaveObserver() {
     ]
   });
 }
+
 
