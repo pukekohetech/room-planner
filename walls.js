@@ -1,24 +1,26 @@
 // ==========================================================
 // Walls (laser view) - merged walls + toggles + floor patch
+// (edited: no double-restore/init, correct opening geometry,
+// student name on walls + floors, export filters respected,
+// touch-friendly toggles, no stale output)
 // Requires: common.js for globals & helpers
 // ==========================================================
 
 /* global svg, wallsSvg, wallHeightInput, wallHeightM, SCALE_M_PER_PX,
           ENABLE_FINGER_JOINTS, LASER_WIDTH, LASER_HEIGHT, joinedMode,
           wallVisibility, floorVisibility, currentStudentName,
-          DOOR_HEIGHT_M, WINDOW_HEAD_DEFAULT_M, WINDOW_HEIGHT_DEFAULT_M, wallHeightM,
-          getMaterialThicknessMm, getRoomDisplayName */
-
-// ==========================================================
-// Touch-friendly helpers
-// ==========================================================
+          DOOR_HEIGHT_M, WINDOW_HEAD_DEFAULT_M, WINDOW_HEIGHT_DEFAULT_M,
+          getMaterialThicknessMm, getRoomDisplayName, requestAutoSave */
 
 const IS_COARSE_POINTER =
   typeof window !== "undefined" &&
   window.matchMedia &&
   window.matchMedia("(pointer: coarse)").matches;
 
-// Prevent accidental toggles while user is scrolling/panning
+// ==========================================================
+// Touch-friendly helpers
+// ==========================================================
+
 function addTapHandler(el, onTap, opts = {}) {
   const moveThreshold = opts.moveThreshold ?? (IS_COARSE_POINTER ? 12 : 8);
 
@@ -35,64 +37,31 @@ function addTapHandler(el, onTap, opts = {}) {
   });
 
   el.addEventListener("pointermove", (e) => {
-    if (Math.abs(e.clientX - startX) > moveThreshold || Math.abs(e.clientY - startY) > moveThreshold) {
+    if (
+      Math.abs(e.clientX - startX) > moveThreshold ||
+      Math.abs(e.clientY - startY) > moveThreshold
+    ) {
       moved = true;
     }
   });
 
   el.addEventListener("pointerup", (e) => {
-    if (!moved) onTap(e);
+    if (moved) return;
+    e.preventDefault?.();
+    onTap(e);
   });
 }
 
 // ==========================================================
-// Hitbox + Export + Storage helpers
+// Hitbox + Export helpers
 // ==========================================================
 
-const WALL_HIT_STROKE_PX = IS_COARSE_POINTER ? 30 : 18; // touch: easier
+const WALL_HIT_STROKE_PX = IS_COARSE_POINTER ? 30 : 18;
 const FLOOR_HIT_PAD_PX   = IS_COARSE_POINTER ? 16 : 10;
-const VIS_STORAGE_KEY    = "laser_visibility_v1";
 
 // Mark nodes as exportable or not. buildSheetSvg will filter by this.
 function setExportFlag(node, enabled) {
   node.setAttribute("data-export", enabled ? "1" : "0");
-}
-
-// Save/load visibility maps (walls + floors)
-function saveLaserVisibility() {
-  try {
-    const payload = {
-      v: 1,
-      studentName: currentStudentName,
-      wallVisibility: Array.from(wallVisibility.entries()),
-      floorVisibility: Array.from(floorVisibility.entries())
-    };
-    localStorage.setItem(VIS_STORAGE_KEY, JSON.stringify(payload));
-  } catch (e) {
-    console.warn("saveLaserVisibility failed", e);
-  }
-}
-
-function loadLaserVisibility() {
-  try {
-    const raw = localStorage.getItem(VIS_STORAGE_KEY);
-    if (!raw) return;
-
-    const parsed = JSON.parse(raw);
-    if (!parsed || parsed.v !== 1) return;
-
-    if (typeof parsed.studentName === "string") {
-      currentStudentName = parsed.studentName;
-    }
-    if (Array.isArray(parsed.wallVisibility)) {
-      wallVisibility = new Map(parsed.wallVisibility);
-    }
-    if (Array.isArray(parsed.floorVisibility)) {
-      floorVisibility = new Map(parsed.floorVisibility);
-    }
-  } catch (e) {
-    console.warn("loadLaserVisibility failed", e);
-  }
 }
 
 function makeFatHitPath(d, wallKey) {
@@ -100,9 +69,9 @@ function makeFatHitPath(d, wallKey) {
   const hit = document.createElementNS(ns, "path");
   hit.setAttribute("d", d);
   hit.setAttribute("fill", "none");
-  hit.setAttribute("stroke", "rgba(0,0,0,0)");       // invisible
+  hit.setAttribute("stroke", "rgba(0,0,0,0)");
   hit.setAttribute("stroke-width", String(WALL_HIT_STROKE_PX));
-  hit.setAttribute("pointer-events", "stroke");      // only stroke clickable
+  hit.setAttribute("pointer-events", "stroke");
   hit.dataset.wallId = wallKey;
   hit.classList.add("wall-hit");
   hit.style.cursor = "pointer";
@@ -113,17 +82,16 @@ function makeFatHitPath(d, wallKey) {
 // Finger joints
 // ==========================================================
 
-// Draw complementary finger-joint outlines on left/right sides
 function drawFingerJointsForWall(wallX, wallY, wallWidthPx, wallHeightPx) {
   const t = getMaterialThicknessMm();
   const useJoints = ENABLE_FINGER_JOINTS && isFinite(t) && t > 0;
-  if (!useJoints) return;
+  if (!useJoints || !wallsSvg) return;
 
   const pitch       = t;
   const innerLeftX  = wallX;
-  const outerLeftX  = wallX - t;                  // left tabs OUTSIDE
+  const outerLeftX  = wallX - t;
   const innerRightX = wallX + wallWidthPx;
-  const outerRightX = innerRightX - t;            // right slots INSIDE
+  const outerRightX = innerRightX - t;
 
   let dLeft  = `M ${innerLeftX} ${wallY}`;
   let dRight = `M ${innerRightX} ${wallY}`;
@@ -169,7 +137,6 @@ function drawFingerJointsForWall(wallX, wallY, wallWidthPx, wallHeightPx) {
   wallsSvg.appendChild(rightPath);
 }
 
-// Build a continuous outline path for a wall, with optional finger joints
 function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints) {
   const t = getMaterialThicknessMm();
 
@@ -177,35 +144,31 @@ function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints
     const x1 = wallX, y1 = wallY;
     const x2 = wallX + wallWidthPx;
     const y2 = wallY + wallHeightPx;
-
     return `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2} L ${x1} ${y2} Z`;
   }
 
   const pitch       = t;
   const innerLeftX  = wallX;
-  const outerLeftX  = wallX - t;                  // left tabs OUTSIDE
+  const outerLeftX  = wallX - t;
   const innerRightX = wallX + wallWidthPx;
-  const outerRightX = innerRightX - t;            // right slots INSIDE
-  const totalHeight = wallHeightPx;
+  const outerRightX = innerRightX - t;
 
-  // Split height into segments
   const segments = [];
-  let remaining = totalHeight;
+  let remaining = wallHeightPx;
   while (remaining > 0) {
     const h = Math.min(pitch, remaining);
     segments.push(h);
     remaining -= h;
   }
-  const n = segments.length;
 
   const topY    = wallY;
-  const bottomY = wallY + totalHeight;
+  const bottomY = wallY + wallHeightPx;
 
   let d = `M ${innerLeftX} ${topY} L ${innerRightX} ${topY}`;
 
-  // Right side down with slots
+  // Right side down (slots)
   let y = topY;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < segments.length; i++) {
     const h = segments[i];
     const nextY = y + h;
     const isTabSegment = (i % 2 === 0);
@@ -221,9 +184,9 @@ function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints
   // Bottom edge
   d += ` L ${innerLeftX} ${bottomY}`;
 
-  // Left side up with tabs
+  // Left side up (tabs)
   y = bottomY;
-  for (let i = n - 1; i >= 0; i--) {
+  for (let i = segments.length - 1; i >= 0; i--) {
     const h = segments[i];
     const prevY = y - h;
     const isTabSegment = (i % 2 === 0);
@@ -244,18 +207,28 @@ function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints
 // Main rebuild
 // ==========================================================
 
-function rebuildWallsView() {
+function clearWallsSvgToEmptySheet() {
   if (!wallsSvg) return;
+
+  while (wallsSvg.firstChild) wallsSvg.removeChild(wallsSvg.firstChild);
+
+  // Keep a sane default viewBox so the wrapper scroll behaves
+  wallsSvg.setAttribute("height", LASER_HEIGHT);
+  wallsSvg.setAttribute("viewBox", `0 0 ${LASER_WIDTH} ${LASER_HEIGHT}`);
+}
+
+function rebuildWallsView() {
+  if (!wallsSvg || !svg) return;
+
+  // ALWAYS clear first, so old joints/labels never persist
+  clearWallsSvgToEmptySheet();
+
+  const rooms = svg.querySelectorAll('rect[data-room]:not([data-feature])');
+  if (!rooms || rooms.length === 0) return;
 
   const t = getMaterialThicknessMm();
   const thickness = (isFinite(t) && t > 0) ? t : 0;
   const useJoints = ENABLE_FINGER_JOINTS && thickness > 0;
-
-  // Clear old contents
-  while (wallsSvg.firstChild) wallsSvg.removeChild(wallsSvg.firstChild);
-
-  const rooms = svg.querySelectorAll('rect[data-room]:not([data-feature])');
-  if (rooms.length === 0) return;
 
   const wallHeightPx = wallHeightM / SCALE_M_PER_PX;
 
@@ -266,10 +239,13 @@ function rebuildWallsView() {
 
   rooms.forEach(roomRect => {
     const roomId = roomRect.dataset.room;
+
     const x = parseFloat(roomRect.getAttribute("x"));
     const y = parseFloat(roomRect.getAttribute("y"));
     const w = parseFloat(roomRect.getAttribute("width"));
     const h = parseFloat(roomRect.getAttribute("height"));
+
+    if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) return;
 
     const baseWalls = [
       { side: "top",    orientation: "h", axis: y,     start: x,     end: x + w },
@@ -299,6 +275,7 @@ function rebuildWallsView() {
   // 2) Merge overlapping segments on each axis
   // --------------------------------------------------------
   const mergedSegments = [];
+  const eps = 0.5;
 
   axisGroups.forEach((segments) => {
     segments.sort((a, b) => a.start - b.start);
@@ -309,7 +286,7 @@ function rebuildWallsView() {
         current = { orientation: seg.orientation, axis: seg.axis, start: seg.start, end: seg.end, walls: [seg] };
         return;
       }
-      const eps = 0.5;
+
       if (seg.start <= current.end + eps) {
         if (seg.end > current.end) current.end = seg.end;
         current.walls.push(seg);
@@ -327,17 +304,17 @@ function rebuildWallsView() {
   // --------------------------------------------------------
   // 3) Layout merged walls into 730x420 sheets
   // --------------------------------------------------------
-  const maxWidth    = LASER_WIDTH - 20;   // side margins
-  const gapX        = Math.max(5, thickness);
-  const gapY        = 8;
-  const topPadding  = 10;
+  const maxWidth   = LASER_WIDTH - 20;
+  const gapX       = Math.max(5, thickness);
+  const gapY       = 8;
+  const topPadding = 10;
 
   const usedSheets = new Set();
   const markSheetUsed = (idx) => usedSheets.add(idx);
 
   let sheetIndex = 0;
-  markSheetUsed(sheetIndex);
   let sheetTop   = 0;
+  markSheetUsed(sheetIndex);
 
   let cursorX   = 10;
   let baselineY = sheetTop + topPadding + wallHeightPx;
@@ -345,6 +322,7 @@ function rebuildWallsView() {
   function startNewRow() {
     cursorX = 10;
     baselineY += wallHeightPx + gapY;
+
     if (baselineY + 5 > sheetTop + LASER_HEIGHT) {
       sheetIndex++;
       sheetTop = sheetIndex * LASER_HEIGHT;
@@ -354,10 +332,10 @@ function rebuildWallsView() {
   }
 
   mergedSegments.forEach(seg => {
-    // Extend wall length by 1× thickness (to the RIGHT end)
-    const baseWidth = seg.end - seg.start;
-    const wallWidthPx = baseWidth + thickness;
-    if (wallWidthPx < 1) return;
+    // IMPORTANT: keep wall width == merged segment length (do not add thickness),
+    // otherwise door/window offsets drift.
+    const wallWidthPx = seg.end - seg.start;
+    if (!isFinite(wallWidthPx) || wallWidthPx < 1) return;
 
     const wallKey = [
       seg.orientation,
@@ -387,15 +365,14 @@ function rebuildWallsView() {
     wallPath.classList.add("wall-strip", enabled ? "enabled" : "disabled");
     setExportFlag(wallPath, enabled);
 
-    // Fat hit path (touch friendly)
+    // Fat hit path (never exported)
     const hitPath = makeFatHitPath(outlineD, wallKey);
-    setExportFlag(hitPath, false); // never export hitboxes
+    setExportFlag(hitPath, false);
 
     addTapHandler(hitPath, (e) => {
       const id = e.currentTarget.dataset.wallId;
-      const current = !!wallVisibility.get(id);
-      wallVisibility.set(id, !current);
-      saveLaserVisibility();
+      wallVisibility.set(id, !wallVisibility.get(id));
+      requestAutoSave?.("toggle wall");
       rebuildWallsView();
       e.stopPropagation();
     });
@@ -418,27 +395,29 @@ function rebuildWallsView() {
     label.setAttribute("font-size", "2px");
     label.setAttribute("font-family", "Arial, sans-serif");
     label.setAttribute("fill", "rgb(0,0,255)");
-
     label.classList.add("wall-label", enabled ? "enabled" : "disabled");
     label.dataset.wallId = wallKey;
     setExportFlag(label, enabled);
 
+    // Student line
     const studentSpan = document.createElementNS(ns, "tspan");
     studentSpan.setAttribute("x", cx);
     studentSpan.setAttribute("dy", "-0.3em");
     studentSpan.textContent = currentStudentName ? `PHS ${currentStudentName}` : "";
     label.appendChild(studentSpan);
 
+    // Room + side
     const nameSpan = document.createElementNS(ns, "tspan");
     nameSpan.setAttribute("x", cx);
     nameSpan.setAttribute("dy", "1.1em");
     nameSpan.textContent = `${roomName} ${primary.side}`;
     label.appendChild(nameSpan);
 
+    // Length
     const sizeSpan = document.createElementNS(ns, "tspan");
     sizeSpan.setAttribute("x", cx);
     sizeSpan.setAttribute("dy", "1.1em");
-    sizeSpan.textContent = `${wallLengthM.toFixed(2)}m`;
+    sizeSpan.textContent = isFinite(wallLengthM) ? `${wallLengthM.toFixed(2)}m` : "";
     label.appendChild(sizeSpan);
 
     wallsSvg.appendChild(label);
@@ -462,25 +441,22 @@ function rebuildWallsView() {
 
       const doorHeightPxConst = DOOR_HEIGHT_M / SCALE_M_PER_PX;
 
-      openings.forEach(obj => {
-        const feature = obj.feature;
-        const wall    = obj.wall;
+      openings.forEach(({ feature, wall }) => {
+        let offPxLocal = parseFloat(feature.dataset.wallOffsetPx);
+        if (!isFinite(offPxLocal)) offPxLocal = 0;
 
-        let offPxLocal = parseFloat(feature.dataset.wallOffsetPx) || 0;
-        let lenPx      = parseFloat(feature.dataset.lengthPx)     || 0;
+        let lenPx = parseFloat(feature.dataset.lengthPx);
+        if (!isFinite(lenPx)) lenPx = 0;
 
         const globalStart = wall.start + offPxLocal;
         let offPx = globalStart - seg.start;
 
-        // Clamp to wallWidthPx (which includes the +thickness extension)
-        if (offPx < 0) offPx = 0;
-        if (lenPx < 0) lenPx = 0;
-        if (offPx > wallWidthPx) offPx = wallWidthPx;
+        offPx = Math.max(0, Math.min(offPx, wallWidthPx));
+        lenPx = Math.max(0, lenPx);
         if (offPx + lenPx > wallWidthPx) lenPx = wallWidthPx - offPx;
         if (lenPx < 1) return;
 
         const kind = feature.dataset.feature;
-
         const holeX = wallX + offPx;
         const holeWidth = lenPx;
 
@@ -491,15 +467,16 @@ function rebuildWallsView() {
           if (holeHeight > wallHeightPx * 0.95) holeHeight = wallHeightPx * 0.95;
           holeY = baselineY - holeHeight;
         } else {
-          let headM = parseFloat(feature.dataset.windowHeadM) || WINDOW_HEAD_DEFAULT_M;
+          let headM = parseFloat(feature.dataset.windowHeadM);
+          if (!isFinite(headM)) headM = WINDOW_HEAD_DEFAULT_M;
           if (headM > wallHeightM) headM = wallHeightM;
 
-          const headPx    = headM / SCALE_M_PER_PX;
+          const headPx = headM / SCALE_M_PER_PX;
           let winHeightPx = WINDOW_HEIGHT_DEFAULT_M / SCALE_M_PER_PX;
           if (winHeightPx > headPx) winHeightPx = headPx;
 
           holeHeight = winHeightPx;
-          holeY      = baselineY - headPx;
+          holeY = baselineY - headPx;
         }
 
         const holeRect = document.createElementNS(ns, "rect");
@@ -530,15 +507,12 @@ function rebuildWallsView() {
 }
 
 // ==========================================================
-// Floor patch (laser pieces) with thickness inset
+// Floor patch (laser pieces)
 // ==========================================================
 
 function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
   const rooms = svg.querySelectorAll('rect[data-room]:not([data-feature])');
-  if (rooms.length === 0) return;
-
-  const t = getMaterialThicknessMm();
-  const thickness = (isFinite(t) && t > 0) ? t : 0;
+  if (!rooms || rooms.length === 0) return;
 
   const maxWidth = LASER_WIDTH - 20;
   const gapX     = 5;
@@ -549,26 +523,28 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
   let sheetTop   = sheetIndex * LASER_HEIGHT;
   markSheetUsed(sheetIndex);
 
-  let currentY = Math.max(lastBaselineY + rowGap, sheetTop + topPad);
-  let cursorX  = 10;
+  let currentY  = Math.max(lastBaselineY + rowGap, sheetTop + topPad);
+  let cursorX   = 10;
   let rowHeight = 0;
 
   rooms.forEach(r => {
     const wPx = parseFloat(r.getAttribute("width"));
     const hPx = parseFloat(r.getAttribute("height"));
-    if (wPx <= 0 || hPx <= 0) return;
+
+    if (!isFinite(wPx) || !isFinite(hPx) || wPx <= 0 || hPx <= 0) return;
 
     const roomId = r.dataset.room;
     if (!floorVisibility.has(roomId)) floorVisibility.set(roomId, true);
     const enabled = !!floorVisibility.get(roomId);
 
-    // Packing still based on original w/h (safe spacing). If you want tighter, we can adjust.
+    // Row wrap
     if (cursorX + wPx + gapX > maxWidth) {
-      cursorX   = 10;
+      cursorX = 10;
       currentY += rowHeight + rowGap;
       rowHeight = 0;
     }
 
+    // Sheet wrap
     if (currentY + hPx + topPad > sheetTop + LASER_HEIGHT) {
       sheetIndex++;
       sheetTop   = sheetIndex * LASER_HEIGHT;
@@ -578,13 +554,6 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
       rowHeight  = 0;
     }
 
-    /* Inset floor piece by thickness on ALL sides
-    const inset = thickness;
-    const floorX = cursorX + inset;
-    const floorY = currentY + inset;
-    const floorW = Math.max(0, wPx - inset * 2);
-    const floorH = Math.max(0, hPx - inset * 2);
-*/
     const floorX = cursorX;
     const floorY = currentY;
     const floorW = wPx;
@@ -619,9 +588,8 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
 
     addTapHandler(hit, (e) => {
       const id = e.currentTarget.dataset.floorId;
-      const current = !!floorVisibility.get(id);
-      floorVisibility.set(id, !current);
-      saveLaserVisibility();
+      floorVisibility.set(id, !floorVisibility.get(id));
+      requestAutoSave?.("toggle floor");
       rebuildWallsView();
       e.stopPropagation();
     });
@@ -629,7 +597,7 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
     wallsSvg.appendChild(hit);
     wallsSvg.appendChild(floorRect);
 
-    // Label
+    // Label (match wall styling + student name)
     const widthM  = floorW * SCALE_M_PER_PX;
     const heightM = floorH * SCALE_M_PER_PX;
     const roomName = getRoomDisplayName(roomId);
@@ -647,18 +615,27 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
     label.classList.add("floor-label", enabled ? "enabled" : "disabled");
     setExportFlag(label, enabled);
 
+    const studentSpan = document.createElementNS(ns, "tspan");
+    studentSpan.setAttribute("x", cx);
+    studentSpan.setAttribute("dy", "-0.3em");
+    studentSpan.textContent = currentStudentName ? `PHS ${currentStudentName}` : "";
+    label.appendChild(studentSpan);
+
     const nameSpan = document.createElementNS(ns, "tspan");
     nameSpan.setAttribute("x", cx);
-    nameSpan.setAttribute("dy", "-0.2em");
+    nameSpan.setAttribute("dy", "1.1em");
     nameSpan.textContent = `${roomName} floor`;
+    label.appendChild(nameSpan);
 
     const sizeSpan = document.createElementNS(ns, "tspan");
     sizeSpan.setAttribute("x", cx);
-    sizeSpan.setAttribute("dy", "1.0em");
-    sizeSpan.textContent = `${widthM.toFixed(2)}m × ${heightM.toFixed(2)}m`;
-
-    label.appendChild(nameSpan);
+    sizeSpan.setAttribute("dy", "1.1em");
+    sizeSpan.textContent =
+      (isFinite(widthM) && isFinite(heightM))
+        ? `${widthM.toFixed(2)}m × ${heightM.toFixed(2)}m`
+        : "";
     label.appendChild(sizeSpan);
+
     wallsSvg.appendChild(label);
 
     cursorX += wPx + gapX;
@@ -673,7 +650,7 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
 function buildSheetSvg(sheetIndex) {
   const ns = "http://www.w3.org/2000/svg";
 
-  const sheetTop = sheetIndex * LASER_HEIGHT;
+  const sheetTop    = sheetIndex * LASER_HEIGHT;
   const sheetBottom = sheetTop + LASER_HEIGHT;
 
   const sheetSvg = document.createElementNS(ns, "svg");
@@ -690,8 +667,7 @@ function buildSheetSvg(sheetIndex) {
     if (!node || node.nodeType !== 1) return;
     if (typeof node.getBBox !== "function") return;
 
-    const exportFlag = node.getAttribute("data-export");
-    if (exportFlag === "0") return;
+    if (node.getAttribute("data-export") === "0") return;
 
     let bb;
     try { bb = node.getBBox(); } catch { return; }
@@ -727,7 +703,6 @@ window.downloadAllSheetsAsSvg = function () {
 
     const serializer = new XMLSerializer();
     let source = serializer.serializeToString(sheetSvg);
-
     if (!source.match(/^<\?xml/)) {
       source = '<?xml version="1.0" standalone="no"?>\n' + source;
     }
@@ -747,26 +722,34 @@ window.downloadAllSheetsAsSvg = function () {
 };
 
 // ==========================================================
-// Init + Wall height change
+// Init
 // ==========================================================
 
-if (wallHeightInput) {
-  wallHeightInput.addEventListener("change", () => {
-    const val = parseFloat(wallHeightInput.value);
-    if (isFinite(val) && val > 0) {
-      wallHeightM = val;
-      rebuildWallsView();
-    }
-  });
-}
+// ==========================================================
+// Init (walls.js should NOT own app init)
+// ==========================================================
 
-document.addEventListener("DOMContentLoaded", () => {
-  loadLaserVisibility();
-  rebuildWallsView();
+function initWallsView() {
+  // Don’t restore here and don’t rebuild here.
+  // plan.js/common.js will call rebuildWallsView() after loading state.
 
   const downloadBtn = document.getElementById("downloadSheetsBtn");
   if (downloadBtn) {
-    // Using onclick prevents double-registration (which causes double downloads)
     downloadBtn.onclick = () => window.downloadAllSheetsAsSvg();
   }
-});
+
+  if (wallHeightInput) {
+    wallHeightInput.addEventListener("change", () => {
+      const val = parseFloat(wallHeightInput.value);
+      if (isFinite(val) && val > 0) {
+        wallHeightM = val;
+        rebuildWallsView();
+        requestAutoSave?.("wall height");
+      }
+    });
+  }
+}
+
+// Still okay to wire buttons on DOMContentLoaded:
+document.addEventListener("DOMContentLoaded", initWallsView);
+

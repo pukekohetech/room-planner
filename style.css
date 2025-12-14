@@ -490,3 +490,10 @@ button:active {
 #floorplanWrapper {
   touch-action: pan-x pan-y;   /* allows normal scroll/pan when touching empty space */
 }
+
+#floorplan rect[data-room]:not([data-feature]) {
+  fill: rgba(0,0,0,0);
+}
+
+#floorplan rect[data-feature] { fill: #80c0ff; }
+#floorplan rect[data-feature][data-feature="door"] { fill: #c08040; }
