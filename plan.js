@@ -9,6 +9,79 @@
 
 // ---------- Feature label helpers (doors/windows) ----------
 
+// ==========================================================
+// Keyboard nudge (arrow keys) for rooms
+// - Moves selected room with arrow keys
+// - Shift = bigger step
+// - Join mode: moves ALL rooms together
+// - Updates labels + features + walls view + autosave
+// ==========================================================
+
+let selectedRoomRect = null; // current room selection for keyboard moves
+
+function setSelectedRoomRect(rect) {
+  selectedRoomRect = rect || null;
+
+  // Optional visual: highlight selected room
+  svg.querySelectorAll('rect[data-room]:not([data-feature])').forEach(r => {
+    r.classList.toggle("room-selected", r === selectedRoomRect);
+  });
+}
+
+function nudgeRect(rect, dx, dy) {
+  if (!rect) return;
+
+  const x = parseFloat(rect.getAttribute("x")) || 0;
+  const y = parseFloat(rect.getAttribute("y")) || 0;
+  rect.setAttribute("x", x + dx);
+  rect.setAttribute("y", y + dy);
+
+  updateRoomLabel(rect);
+  updateFeaturesForRoom(rect);
+}
+
+function nudgeSelectedRoom(dx, dy) {
+  if (!selectedRoomRect) return;
+
+  if (joinedMode) {
+    // Move all rooms together
+    const rooms = svg.querySelectorAll('rect[data-room]:not([data-feature])');
+    rooms.forEach(r => nudgeRect(r, dx, dy));
+  } else {
+    nudgeRect(selectedRoomRect, dx, dy);
+  }
+
+  rebuildWallsView();
+  requestAutoSave?.("keyboard nudge");
+}
+
+// Install once
+document.addEventListener("keydown", (e) => {
+  // Don’t steal keys when typing in an input
+  const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+  const isTyping =
+    tag === "input" || tag === "textarea" || e.target?.isContentEditable;
+  if (isTyping) return;
+
+  // Only act if we have a selected room
+  if (!selectedRoomRect) return;
+
+  // Steps in PX (your scale converts px->m; keep this as "nudge pixels")
+  const step = e.shiftKey ? 10 : 2;
+
+  let dx = 0, dy = 0;
+  if (e.key === "ArrowLeft")  dx = -step;
+  if (e.key === "ArrowRight") dx =  step;
+  if (e.key === "ArrowUp")    dy = -step;
+  if (e.key === "ArrowDown")  dy =  step;
+
+  if (dx !== 0 || dy !== 0) {
+    e.preventDefault();
+    nudgeSelectedRoom(dx, dy);
+  }
+});
+
+
 function getFeatureLabel(feature) {
   const fid = feature.dataset.featureId;
   return svg.querySelector(`text[data-feature-label="${fid}"]`);
@@ -876,6 +949,9 @@ svg.addEventListener("pointerdown", (evt) => {
   const isFeatureRect = isRect && !!target.dataset.feature;
   const isRoomRect    = isRect && !!target.dataset.room && !isFeatureRect;
 
+  if (!isRoomRect) setSelectedRoomRect(null);
+
+
   // 1) If we're in addDoor/addWindow mode and click NOT on a room -> exit
   if ((currentTool === "addDoor" || currentTool === "addWindow") && !isRoomRect) {
     setTool("select");
@@ -910,6 +986,7 @@ svg.addEventListener("pointerdown", (evt) => {
   const pos = getPointerPosition(evt);
   startPointer = pos;
   draggingRoom = target;
+  setSelectedRoomRect(target);
 
   const x = parseFloat(target.getAttribute("x"));
   const y = parseFloat(target.getAttribute("y"));
