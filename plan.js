@@ -17,6 +17,133 @@
 // - Updates labels + features + walls view + autosave
 // ==========================================================
 
+// ==========================================================
+// PLAN VIEW UI ZOOM + PAN (viewBox only, laser scale unchanged)
+// Wheel = zoom, Drag middle mouse / Space+drag = pan
+// ==========================================================
+function installPlanViewZoom(svgEl) {
+  if (!svgEl) return;
+
+  svgEl.style.touchAction = "none"; // helps trackpad/touch
+
+  // If SVG has no viewBox yet, create one from its rendered size
+  if (!svgEl.getAttribute("viewBox")) {
+    const w = svgEl.viewBox?.baseVal?.width || svgEl.clientWidth || 800;
+    const h = svgEl.viewBox?.baseVal?.height || svgEl.clientHeight || 600;
+    svgEl.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  }
+
+  const vb = () => {
+    const [x, y, w, h] = svgEl.getAttribute("viewBox").split(/\s+/).map(Number);
+    return { x, y, w, h };
+  };
+  const setVb = (v) => svgEl.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  // Zoom limits (UI only)
+  const MIN_W = 50;     // zoom in limit
+  const MAX_W = 5000;   // zoom out limit
+
+  function getSvgPointFromClient(clientX, clientY) {
+    const pt = svgEl.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const m = svgEl.getScreenCTM();
+    return m ? pt.matrixTransform(m.inverse()) : { x: clientX, y: clientY };
+  }
+
+  svgEl.addEventListener("wheel", (e) => {
+    e.preventDefault();
+
+    const v = vb();
+    const mouse = getSvgPointFromClient(e.clientX, e.clientY);
+
+    // Trackpad friendly zoom
+    const zoomFactor = Math.pow(1.0015, e.deltaY);
+    let newW = v.w * zoomFactor;
+    let newH = v.h * zoomFactor;
+
+    // Keep aspect
+    const aspect = v.w / v.h;
+    newW = clamp(newW, MIN_W, MAX_W);
+    newH = newW / aspect;
+
+    // Zoom about mouse point
+    const rx = (mouse.x - v.x) / v.w;
+    const ry = (mouse.y - v.y) / v.h;
+
+    const newX = mouse.x - rx * newW;
+    const newY = mouse.y - ry * newH;
+
+    setVb({ x: newX, y: newY, w: newW, h: newH });
+  }, { passive: false });
+
+  // Pan: middle mouse drag OR Space+drag
+  let panning = false;
+  let panStart = null;
+  let vbStart = null;
+  let spaceDown = false;
+
+  window.addEventListener("keydown", (e) => { if (e.code === "Space") spaceDown = true; });
+  window.addEventListener("keyup",   (e) => { if (e.code === "Space") spaceDown = false; });
+
+  svgEl.addEventListener("pointerdown", (e) => {
+    const isMiddle = (e.button === 1);
+    if (!isMiddle && !spaceDown) return;
+
+    panning = true;
+    panStart = { x: e.clientX, y: e.clientY };
+    vbStart = vb();
+    svgEl.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  });
+
+  svgEl.addEventListener("pointermove", (e) => {
+    if (!panning || !panStart || !vbStart) return;
+
+    // Convert screen delta to viewBox delta
+    const rect = svgEl.getBoundingClientRect();
+    const dx = (e.clientX - panStart.x) * (vbStart.w / rect.width);
+    const dy = (e.clientY - panStart.y) * (vbStart.h / rect.height);
+
+    setVb({ x: vbStart.x - dx, y: vbStart.y - dy, w: vbStart.w, h: vbStart.h });
+    e.preventDefault();
+  });
+
+  function endPan(e) {
+    if (!panning) return;
+    panning = false;
+    panStart = null;
+    vbStart = null;
+    e?.preventDefault?.();
+  }
+
+  svgEl.addEventListener("pointerup", endPan);
+  svgEl.addEventListener("pointercancel", endPan);
+
+  // Optional: quick zoom keys
+  window.addEventListener("keydown", (e) => {
+    const tag = (e.target?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || e.target?.isContentEditable) return;
+
+    if (e.key === "+" || e.key === "=") {
+      const v = vb();
+      setVb({ x: v.x + v.w*0.05, y: v.y + v.h*0.05, w: v.w*0.9, h: v.h*0.9 });
+    }
+    if (e.key === "-" || e.key === "_") {
+      const v = vb();
+      setVb({ x: v.x - v.w*0.055, y: v.y - v.h*0.055, w: v.w/0.9, h: v.h/0.9 });
+    }
+  });
+}
+
+// Call once after SVG exists
+document.addEventListener("DOMContentLoaded", () => {
+  installPlanViewZoom(svg);
+});
+
+
 let selectedRoomRect = null; // current room selection for keyboard moves
 
 function setSelectedRoomRect(rect) {
@@ -1050,7 +1177,7 @@ svg.addEventListener("pointermove", (evt) => {
     svg.style.cursor = "nwse-resize";
     let newW = startRect.w + dx;
     let newH = startRect.h + dy;
-    const minSize = 30;
+    const minSize = 15;
     if (newW < minSize) newW = minSize;
     if (newH < minSize) newH = minSize;
     draggingRoom.setAttribute("width",  newW);
