@@ -391,6 +391,8 @@ function rebuildWallsView() {
 
     label.setAttribute("x", cx);
     label.setAttribute("y", cy);
+
+    
     label.setAttribute("text-anchor", "middle");
     label.setAttribute("font-size", "2px");
     label.setAttribute("font-family", "Arial, sans-serif");
@@ -608,6 +610,8 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
 
     label.setAttribute("x", cx);
     label.setAttribute("y", cy);
+
+    
     label.setAttribute("text-anchor", "middle");
     label.setAttribute("font-size", "2px");
     label.setAttribute("font-family", "Arial, sans-serif");
