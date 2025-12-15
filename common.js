@@ -371,6 +371,36 @@ function loadFloorplanFromLocalStorage() {
 // HELPERS USED ACROSS FILES
 // ==========================================================
 
+function resetRoomPlannerStorage() {
+  // 1) Clear known keys (edit these to match your real keys if different)
+  const knownKeys = [
+    "floorplanState",
+    "floorplan",
+    "rooms",
+    "roomPlannerState",
+    "wallVisibility",
+    "floorVisibility",
+    "studentName",
+    "joinedMode",
+    "lockSizes"
+  ];
+
+  knownKeys.forEach(k => localStorage.removeItem(k));
+
+  // 2) Also clear any keys that look like they belong to this app
+  // (helps if you renamed keys during development)
+  const prefixHints = ["room", "floor", "plan", "wall", "laser", "pukekohe"];
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i);
+    if (!key) continue;
+    const low = key.toLowerCase();
+    if (prefixHints.some(h => low.includes(h))) {
+      localStorage.removeItem(key);
+    }
+  }
+}
+
+
 function setStudentName(name) {
   currentStudentName = String(name || "").trim();
   requestAutoSave("student name");

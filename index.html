@@ -1,16 +1,14 @@
-<!DOCTYPE html>
-<html lang="en">
 <head>
   <meta charset="UTF-8" />
 
   <!-- PWA -->
-  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#0b5fff">
   <meta name="apple-mobile-web-app-title" content="Room Planner">
   <!-- iOS -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
 
   <!-- Android/Chrome legacy -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -153,6 +151,7 @@
         </div>
       </div>
 
+
       <!-- Laser Cutting Instructions -->
       <div id="wallsHint">
         <strong>Laser layout (730mm × 420mm):</strong>
@@ -165,7 +164,12 @@
           with the size directly underneath.
         </p>
       </div>
+            <button id="resetAppBtn" class="danger-btn" type="button">
+  Reset / Clear Saved Work
+</button>
+
     </div>
+    
 
     <!-- RIGHT SIDE: Floor Plan + Wall Elevations -->
     <div id="main">
@@ -217,7 +221,7 @@
     </div>
   </div>
 
-  <
+  <!-- Service Worker Registration (for PWA) -->
  <!-- Service Worker Registration (for PWA) -->
 <script type="module">
   import { registerServiceWorker } from "./register-sw.js";
@@ -229,7 +233,4 @@
   <script src="walls.js"></script>
   <script src="plan.js"></script>
 </body>
-
 </html>
-
-

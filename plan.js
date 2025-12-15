@@ -17,12 +17,29 @@
 // - Updates labels + features + walls view + autosave
 // ==========================================================
 
+
+// ----------------------------------------------------------
+// Ensure room rect has visible plan styling
+// (fixes rooms that exist but have invisible walls)
+// ----------------------------------------------------------
+function ensureRoomRectLooksLikeARoom(rect) {
+  if (!rect || !rect.dataset || !rect.dataset.room) return;
+
+  rect.setAttribute("fill", "rgba(0,0,0,0)");
+  rect.setAttribute("stroke", "black");
+  rect.setAttribute("stroke-width", "3");
+  rect.setAttribute("pointer-events", "bounding-box");
+}
+
+
 // ==========================================================
 // PLAN VIEW UI ZOOM + PAN (viewBox only, laser scale unchanged)
 // Wheel = zoom, Drag middle mouse / Space+drag = pan
 // ==========================================================
 const SNAP_TOUCH_PX = 12;   // touching walls (strong)
 const SNAP_ALIGN_PX = 6;    // alignment only (weak)
+
+
 
 
 function installPlanViewZoom(svgEl) {
@@ -141,6 +158,7 @@ function installPlanViewZoom(svgEl) {
     }
   });
 }
+
 
 
 
@@ -315,7 +333,7 @@ function refreshAllPlanLabels() {
       label.dataset.roomLabel = id;
       label.setAttribute("text-anchor", "middle");
       label.setAttribute("dominant-baseline", "middle");
-      label.setAttribute("font-size", "4");
+      label.setAttribute("font-size", "8");
       label.setAttribute("fill", "black");
       label.setAttribute("pointer-events", "auto");
       label.style.cursor = "pointer";
@@ -460,7 +478,7 @@ function ensureRoomLabelForRect(rect) {
 
   label.setAttribute("text-anchor", "middle");
   label.setAttribute("dominant-baseline", "middle");
-  label.setAttribute("font-size", "4");
+  label.setAttribute("font-size", "8");
   label.setAttribute("fill", "black");
   label.setAttribute("pointer-events", "auto");
   label.style.cursor = "pointer";
@@ -963,7 +981,7 @@ function createFeatureHandles(feature) {
   featureHandleStart = document.createElementNS("http://www.w3.org/2000/svg", "circle");
   featureHandleStart.setAttribute("cx", startCx);
   featureHandleStart.setAttribute("cy", startCy);
-  featureHandleStart.setAttribute("r", 9);
+  featureHandleStart.setAttribute("r", 4);
   featureHandleStart.setAttribute("fill", "#ffffff");
   featureHandleStart.setAttribute("stroke", "#000000");
   featureHandleStart.style.cursor = "move";
@@ -971,7 +989,7 @@ function createFeatureHandles(feature) {
   featureHandleEnd = document.createElementNS("http://www.w3.org/2000/svg", "circle");
   featureHandleEnd.setAttribute("cx", endCx);
   featureHandleEnd.setAttribute("cy", endCy);
-  featureHandleEnd.setAttribute("r", 9);
+  featureHandleEnd.setAttribute("r", 4);
   featureHandleEnd.setAttribute("fill", "#ffffff");
   featureHandleEnd.setAttribute("stroke", "#000000");
   featureHandleEnd.style.cursor = "nwse-resize";
@@ -1089,7 +1107,14 @@ function applySnapping(rect, proposedX, proposedY) {
 // Pointer events on SVG (rooms + features)
 
 svg.addEventListener("pointerdown", (evt) => {
+  
+//if (evt.pointerType === "touch" && evt.isPrimary === false) return; // ignore 2nd finger
+
+ // if (evt.isPrimary === false) return; // ignore non-primary pointers (2nd finger)
+
+
   const target = evt.target;
+  
 
   // clicking room label handled separately
   if (target.tagName === "text" && target.dataset.room) return;
@@ -1144,7 +1169,7 @@ svg.addEventListener("pointerdown", (evt) => {
   const h = parseFloat(target.getAttribute("height"));
   startRect = { x, y, w, h };
 
-  const margin     = 30;
+  const margin     = 5;
   const nearRight  = pos.x > x + w - margin && pos.x < x + w + margin;
   const nearBottom = pos.y > y + h - margin && pos.y < y + h + margin;
 
@@ -1169,6 +1194,50 @@ svg.addEventListener("pointerdown", (evt) => {
 
   evt.preventDefault();
 });
+
+//==========================================================================
+//=============new ========================================================
+const HOVER_MARGIN = 5;
+
+svg.addEventListener("pointermove", (evt) => {
+  if (currentTool !== "select") return;
+  if (draggingRoom) return;
+
+  const target = evt.target;
+  const isRoomRect = target?.matches?.('rect[data-room]:not([data-feature])');
+
+  if (!isRoomRect) {
+    svg.style.cursor = "";
+    return;
+  }
+
+  const pos = getPointerPosition(evt);
+
+  const x = parseFloat(target.getAttribute("x"));
+  const y = parseFloat(target.getAttribute("y"));
+  const w = parseFloat(target.getAttribute("width"));
+  const h = parseFloat(target.getAttribute("height"));
+
+  const nearRight  = Math.abs(pos.x - (x + w)) < HOVER_MARGIN;
+  const nearBottom = Math.abs(pos.y - (y + h)) < HOVER_MARGIN;
+
+  const hoverMode =
+    (joinedMode || lockSizes)
+      ? "move"
+      : (nearRight || nearBottom) ? "resize" : "move";
+
+  svg.style.cursor = (hoverMode === "resize") ? "nwse-resize" : "move";
+
+  target.classList.toggle("room-hover-resize", hoverMode === "resize");
+  target.classList.toggle("room-hover-move", hoverMode === "move");
+});
+
+//=========================================================================
+
+
+
+
+
 
 svg.addEventListener("pointermove", (evt) => {
   if (!draggingRoom || !dragMode) return;
@@ -1239,11 +1308,13 @@ svg.addEventListener("pointercancel", endRoomDrag);
 
 function rebuildPlanLabelsAndBindings() {
   // Rooms
-  const rooms = Array.from(svg.querySelectorAll('rect[data-room]:not([data-feature])'));
-  rooms.forEach(r => {
-    ensureRoomLabelForRect(r);
-    updateRoomLabel(r);
-  });
+  const rooms = svg.querySelectorAll('rect[data-room]:not([data-feature])');
+
+rooms.forEach(r => {
+  ensureRoomRectLooksLikeARoom(r);
+  ensureRoomLabelForRect(r);
+  updateRoomLabel(r);
+});
 
   // Features
   const feats = Array.from(svg.querySelectorAll('rect[data-feature]'));
@@ -1295,17 +1366,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
 
-  // 1) Make sure svg ref is valid (if you have ensureSvgBound in common.js)
-  // ensureSvgBound?.();
+  // 1) clear all button;
+  const resetBtn = document.getElementById("resetAppBtn");
+if (resetBtn) {
+  resetBtn.addEventListener("click", () => {
+    const ok = confirm(
+      "This will permanently delete the saved plan on this device.\n\nContinue?"
+    );
+    if (!ok) return;
+
+    resetRoomPlannerStorage();   // from common.js
+    location.reload();           // hard reset UI state
+  });
+}
+
 
   // 2) Load saved rooms/features/etc (ONLY ONE system)
   loadFloorplanFromLocalStorage?.();   // OR loadFloorplanState() (but not both)
+
+  svg.querySelectorAll('rect[data-room]:not([data-feature])')
+  .forEach(ensureRoomRectLooksLikeARoom);
 
   // 3) Recreate any missing labels (rooms + features)
   refreshAllPlanLabels?.();
 
   // 4) Install zoom AFTER svg exists
   installPlanViewZoom?.(svg);
+
+ // installTouchPinchAndHover(svg, { resizeMargin: 5 });
 
   // 5) Sync Join UI from actual state
    //If toggleJoinBtn is now a checkbox switch:
