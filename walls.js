@@ -244,7 +244,7 @@ function rebuildWallsView() {
   // 3) Layout merged walls into 730x420 sheets
   // --------------------------------------------------------
   const maxWidth   = LASER_WIDTH - 20;
-  const gapX       = Math.max(5, thickness);
+  const gapX       = Math.max(1, thickness+1);
   const gapY       = 8;
   const topPadding = 10;
 
