@@ -21,6 +21,10 @@
 // PLAN VIEW UI ZOOM + PAN (viewBox only, laser scale unchanged)
 // Wheel = zoom, Drag middle mouse / Space+drag = pan
 // ==========================================================
+const SNAP_TOUCH_PX = 12;   // touching walls (strong)
+const SNAP_ALIGN_PX = 6;    // alignment only (weak)
+
+
 function installPlanViewZoom(svgEl) {
   if (!svgEl) return;
 
@@ -138,10 +142,6 @@ function installPlanViewZoom(svgEl) {
   });
 }
 
-// Call once after SVG exists
-document.addEventListener("DOMContentLoaded", () => {
-  installPlanViewZoom(svg);
-});
 
 
 let selectedRoomRect = null; // current room selection for keyboard moves
@@ -315,7 +315,7 @@ function refreshAllPlanLabels() {
       label.dataset.roomLabel = id;
       label.setAttribute("text-anchor", "middle");
       label.setAttribute("dominant-baseline", "middle");
-      label.setAttribute("font-size", "12");
+      label.setAttribute("font-size", "4");
       label.setAttribute("fill", "black");
       label.setAttribute("pointer-events", "auto");
       label.style.cursor = "pointer";
@@ -434,12 +434,7 @@ addWindowBtn.addEventListener("click", () => {
   setTool(currentTool === "addWindow" ? "select" : "addWindow");
 });
 
-toggleJoinBtn.addEventListener("click", () => {
-  joinedMode = !joinedMode;
-  toggleJoinBtn.textContent = "Join: " + (joinedMode ? "ON" : "OFF");
-  rebuildWallsView();
-  requestAutoSave("toggle join");
-});
+//
 
 addRectBtn.addEventListener("click", () => {
   createRoom(100, 100, 120, 80);
@@ -465,7 +460,7 @@ function ensureRoomLabelForRect(rect) {
 
   label.setAttribute("text-anchor", "middle");
   label.setAttribute("dominant-baseline", "middle");
-  label.setAttribute("font-size", "12");
+  label.setAttribute("font-size", "4");
   label.setAttribute("fill", "black");
   label.setAttribute("pointer-events", "auto");
   label.style.cursor = "pointer";
@@ -1019,7 +1014,6 @@ function updateFeatureHandlesPosition() {
 // ----------------------------------------------------------
 // Snapping & pointer handling for rooms
 // ----------------------------------------------------------
-
 function applySnapping(rect, proposedX, proposedY) {
   const w = parseFloat(rect.getAttribute("width"));
   const h = parseFloat(rect.getAttribute("height"));
@@ -1027,12 +1021,17 @@ function applySnapping(rect, proposedX, proposedY) {
   let snappedX = proposedX;
   let snappedY = proposedY;
 
-  const currLeft   = proposedX;
-  const currRight  = proposedX + w;
-  const currTop    = proposedY;
-  const currBottom = proposedY + h;
+  const allRects = Array.from(
+    svg.querySelectorAll('rect[data-room]:not([data-feature])')
+  );
 
-  const allRects = Array.from(svg.querySelectorAll('rect[data-room]:not([data-feature])'));
+  const overlapMin = 20; // px overlap required to consider a shared wall
+
+  const snap = (value, target, dist) =>
+    Math.abs(value - target) <= dist ? target : value;
+
+  const overlap = (a1, a2, b1, b2) =>
+    Math.min(a2, b2) - Math.max(a1, b1);
 
   allRects.forEach(other => {
     if (other === rect) return;
@@ -1042,26 +1041,50 @@ function applySnapping(rect, proposedX, proposedY) {
     const ow = parseFloat(other.getAttribute("width"));
     const oh = parseFloat(other.getAttribute("height"));
 
-    const oLeft   = ox;
-    const oRight  = ox + ow;
-    const oTop    = oy;
-    const oBottom = oy + oh;
+    const oL = ox;
+    const oR = ox + ow;
+    const oT = oy;
+    const oB = oy + oh;
 
-    const verticalOverlap = Math.min(currBottom, oBottom) - Math.max(currTop, oTop);
-    if (verticalOverlap > 0) {
-      if (Math.abs(currLeft - oRight) <= SNAP_DISTANCE)  snappedX = oRight;
-      if (Math.abs(currRight - oLeft) <= SNAP_DISTANCE)  snappedX = oLeft - w;
+    const sL = snappedX;
+    const sR = snappedX + w;
+    const sT = snappedY;
+    const sB = snappedY + h;
+
+    const vOverlap = overlap(sT, sB, oT, oB);
+    const hOverlap = overlap(sL, sR, oL, oR);
+
+    // --------------------------------------------------
+    // 1) TOUCHING WALLS (strong snap, requires overlap)
+    // --------------------------------------------------
+    if (vOverlap >= overlapMin) {
+      snappedX = snap(snappedX, oR, SNAP_TOUCH_PX);      // left to right
+      snappedX = snap(snappedX, oL - w, SNAP_TOUCH_PX);  // right to left
     }
 
-    const horizontalOverlap = Math.min(currRight, oRight) - Math.max(currLeft, oLeft);
-    if (horizontalOverlap > 0) {
-      if (Math.abs(currTop - oBottom) <= SNAP_DISTANCE)  snappedY = oBottom;
-      if (Math.abs(currBottom - oTop) <= SNAP_DISTANCE)  snappedY = oTop - h;
+    if (hOverlap >= overlapMin) {
+      snappedY = snap(snappedY, oB, SNAP_TOUCH_PX);      // top to bottom
+      snappedY = snap(snappedY, oT - h, SNAP_TOUCH_PX);  // bottom to top
     }
+
+    // --------------------------------------------------
+    // 2) ALIGNMENT (weak snap, no forced touching)
+    // --------------------------------------------------
+    snappedX = snap(snappedX, oL, SNAP_ALIGN_PX);
+    snappedX = snap(snappedX, oR - w, SNAP_ALIGN_PX);
+
+    snappedY = snap(snappedY, oT, SNAP_ALIGN_PX);
+    snappedY = snap(snappedY, oB - h, SNAP_ALIGN_PX);
   });
+
+  // tiny quantize to kill floating-point dust
+  snappedX = Math.round(snappedX * 10) / 10;
+  snappedY = Math.round(snappedY * 10) / 10;
 
   return { x: snappedX, y: snappedY };
 }
+
+
 
 // Pointer events on SVG (rooms + features)
 
@@ -1125,7 +1148,11 @@ svg.addEventListener("pointerdown", (evt) => {
   const nearRight  = pos.x > x + w - margin && pos.x < x + w + margin;
   const nearBottom = pos.y > y + h - margin && pos.y < y + h + margin;
 
+  if (joinedMode || lockSizes) {
+  dragMode = "move";
+} else {
   dragMode = (nearRight || nearBottom) ? "resize" : "move";
+}
 
   svg.style.cursor = (dragMode === "resize") ? "nwse-resize" : "move";
 
@@ -1231,27 +1258,89 @@ function rebuildPlanLabelsAndBindings() {
 // ----------------------------------------------------------
 // Startup (ONE place only)
 // ----------------------------------------------------------
-window.addEventListener("DOMContentLoaded", () => {
-  // Load saved rooms/features/etc
+document.addEventListener("DOMContentLoaded", () => {
+  // --- Lock Sizes ---
+  const lockChk = document.getElementById("lockSizesChk");
+  const lockStatus = document.getElementById("lockSizesStatus");
+
+  if (lockChk) {
+    lockChk.checked = !!lockSizes;
+    if (lockStatus) lockStatus.textContent = lockSizes ? "ON" : "OFF";
+
+    lockChk.addEventListener("change", () => {
+      lockSizes = lockChk.checked;
+      if (lockStatus) lockStatus.textContent = lockSizes ? "ON" : "OFF";
+      requestAutoSave?.("lock sizes");
+    });
+  }
+
+  // --- Join Mode (Add Floors) ---
+  const joinChk = document.getElementById("toggleJoinBtn"); // your checkbox id
+  const joinStatus = document.getElementById("joinStatus"); // your <span id="joinStatus">
+
+  if (joinChk) {
+    // sync UI from real state
+    joinChk.checked = !!joinedMode;
+    if (joinStatus) joinStatus.textContent = joinedMode ? "ON" : "OFF";
+
+    joinChk.addEventListener("change", () => {
+      joinedMode = joinChk.checked;
+      if (joinStatus) joinStatus.textContent = joinedMode ? "ON" : "OFF";
+
+      rebuildWallsView?.();              // floors show/hide
+      requestAutoSave?.("join mode");    // persist
+    });
+  }
+
+
+
+
+  // 1) Make sure svg ref is valid (if you have ensureSvgBound in common.js)
+  // ensureSvgBound?.();
+
+  // 2) Load saved rooms/features/etc (ONLY ONE system)
   loadFloorplanFromLocalStorage?.();   // OR loadFloorplanState() (but not both)
 
-  refreshAllPlanLabels();     
+  // 3) Recreate any missing labels (rooms + features)
+  refreshAllPlanLabels?.();
 
-  // Sync Join button text to the REAL joinedMode value
-  if (toggleJoinBtn) {
+  // 4) Install zoom AFTER svg exists
+  installPlanViewZoom?.(svg);
+
+  // 5) Sync Join UI from actual state
+   //If toggleJoinBtn is now a checkbox switch:
+   toggleJoinBtn.checked = !!joinedMode;
+   document.getElementById("joinStatus").textContent = joinedMode ? "ON" : "OFF";
+  // If you're still using the old button text:
+  if (toggleJoinBtn && toggleJoinBtn.tagName !== "INPUT") {
     toggleJoinBtn.textContent = "Join: " + (joinedMode ? "ON" : "OFF");
   }
 
-  // Install autosave watcher
-  installFeatureAutoSaveObserver?.();
-
-  // Now rebuild laser view AFTER state is loaded
-  rebuildWallsView();
-
-  // Student name input hookup if you have it
+  // 6) Hook student name input
   const nameInput = document.getElementById("studentNameInput");
   if (nameInput) {
     nameInput.value = currentStudentName || "";
     nameInput.addEventListener("input", () => setStudentName(nameInput.value));
   }
+
+  // 7) Autosave watcher LAST (so loading doesn't trigger saves)
+  installFeatureAutoSaveObserver?.();
+
+  // 8) Build laser view AFTER state + labels exist
+  rebuildWallsView?.();
+
+  // rebuild fingerjoints
+  if (materialThicknessInput) {
+  materialThicknessInput.addEventListener("input", () => {
+    rebuildWallsView();
+    requestAutoSave?.("material thickness");
+  });
+
+  // optional: also rebuild on blur/change for number inputs
+  materialThicknessInput.addEventListener("change", () => {
+    rebuildWallsView();
+    requestAutoSave?.("material thickness");
+  });
+}
+
 });

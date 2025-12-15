@@ -13,6 +13,10 @@
   <title>Floor Plan Builder</title>
   <link rel="stylesheet" href="style.css" />
 </head>
+<script src="common.js" defer></script>
+<script src="floorplan.js" defer></script>
+<script src="walls.js" defer></script>
+
 <body>
   <header id="app-header">
     <div class="header-content">
@@ -56,15 +60,31 @@
           Add Window
         </button>
 
-        <!-- Mode toggle -->
-        <div class="toggle-control">
-          <span>Add Floors</span>
-          <label class="switch">
-            <input type="checkbox" id="toggleJoinBtn">
-            <span class="slider round"></span>
-          </label>
-          <span id="joinStatus"></span>
-        </div>
+<div class="toggle-control">
+  <span class="toggle-label">Add Floors</span>
+
+  <div class="toggle-right">
+    <label class="switch">
+      <input type="checkbox" id="toggleJoinBtn">
+      <span class="slider round"></span>
+    </label>
+    <span id="joinStatus" class="toggle-status">ON</span>
+  </div>
+</div>
+
+<div class="toggle-control">
+  <span class="toggle-label">Lock Sizes</span>
+
+  <div class="toggle-right">
+    <label class="switch">
+      <input type="checkbox" id="lockSizesChk">
+      <span class="slider round"></span>
+    </label>
+    <span id="lockSizesStatus" class="toggle-status">ON</span>
+  </div>
+</div>
+
+        
 
         <!-- Student name (full width) -->
         <label class="student-name-label">

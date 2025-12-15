@@ -12,9 +12,12 @@ const STORAGE_KEY = "floorplanConfig_v11";
 // ==========================================================
 
 let svg = document.getElementById("floorplan");
+let lockSizes = false;
+
 
 // Toolbar buttons
 const toggleJoinBtn     = document.getElementById("toggleJoinBtn");
+
 const addRectBtn        = document.getElementById("addRectBtn");
 const addDoorBtn        = document.getElementById("addDoorBtn");
 const addWindowBtn      = document.getElementById("addWindowBtn");
@@ -124,7 +127,7 @@ function serializeFloorplan() {
       version: 1,
       meta: { savedAt: new Date().toISOString(), studentName: currentStudentName || "" },
       counters: { nextRoomId, nextFeatureId },
-      ui: { joinedMode, currentTool },
+      ui: { joinedMode, currentTool, lockSizes },
       visibility: {
         wallVis: Object.fromEntries(wallVisibility.entries()),
         floorVis: Object.fromEntries(floorVisibility.entries())
@@ -259,10 +262,11 @@ function restoreFloorplanFromPayload(payload) {
     clearFloorplanSvg();
 
     // Restore UI
-    if (payload.ui) {
-      joinedMode = !!payload.ui.joinedMode;
-      currentTool = payload.ui.currentTool || currentTool;
-    }
+if (payload.ui) {
+  joinedMode  = !!payload.ui.joinedMode;
+  currentTool = payload.ui.currentTool || currentTool;
+  lockSizes   = !!payload.ui.lockSizes;
+}
 
     // Student name
     if (typeof payload.meta?.studentName === "string") {

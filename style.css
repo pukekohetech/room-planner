@@ -430,11 +430,11 @@ button:active {
   fill: rgb(0,0,255);
   pointer-events: none;
   font-weight: 500;
-  font-size: 4px;
+  font-size: 3px;
 }
 
 .wall-label tspan,
-.floor-label tspan { font-size: 8px; }
+.floor-label tspan { font-size: 4px; }
 
 .wall-label.disabled,
 .floor-label.disabled { opacity: 0.35; }
@@ -497,3 +497,28 @@ button:active {
 
 #floorplan rect[data-feature] { fill: #80c0ff; }
 #floorplan rect[data-feature][data-feature="door"] { fill: #c08040; }
+
+
+.toggle-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between; /* pushes switch to the right */
+  gap: 12px;
+  margin: 8px 0;
+}
+
+.toggle-label {
+  font-weight: 600;
+}
+
+.toggle-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toggle-status {
+  min-width: 28px;
+  text-align: left;
+  font-weight: 600;
+}
