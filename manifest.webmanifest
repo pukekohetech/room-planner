@@ -1,37 +1,14 @@
 {
-  "name": "Room Maker",
-  "short_name": "RoomMaker",
-  "description": "A Progressive Web App",
-  "start_url": "./",
-  "scope": "./",
+  "name": "Floor Plan Builder",
+  "short_name": "Room Planner",
+  "id": "/room-planner/",
+  "start_url": "/room-planner/",
+  "scope": "/room-planner/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#0b5fff",
-  "orientation": "any",
+  "theme_color": "#ffffff",
   "icons": [
-    {
-      "src": "icons/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icons/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icons/maskable-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "icons/maskable-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
   ]
 }
