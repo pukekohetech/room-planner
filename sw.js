@@ -1,22 +1,34 @@
-/* sw.js - basic PWA service worker (offline-first for app shell, network-first for navigation) */
-const CACHE_VERSION = "v3";
+/* sw.js - GitHub Pages-friendly offline-first */
+const CACHE_VERSION = "v4";
 const APP_SHELL_CACHE = `app-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `runtime-${CACHE_VERSION}`;
 
-// Add your core files here (adjust paths to match your build output)
-const APP_SHELL_FILES = [
-  "/",
-  "/index.html",
-  "/manifest.webmanifest",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/icons/maskable-192.png",
-  "/icons/maskable-512.png"
+// Helper: build URLs relative to the SW scope (e.g. .../room-planner/)
+function u(path) {
+  return new URL(path, self.registration.scope).toString();
+}
+
+// ✅ Add *all* the files your app needs to load offline
+const APP_SHELL_URLS = [
+  u("./"),
+  u("./index.html"),
+  u("./manifest.webmanifest"),
+  u("./styles.css"),          // if you have it
+  u("./common.js"),
+  u("./plan.js"),
+  u("./walls.js"),
+  u("./register-sw.js"),
+
+  // icons (adjust to your real paths/names)
+  u("./icons/icon-192.png"),
+  u("./icons/icon-512.png"),
+  u("./icons/maskable-192.png"),
+  u("./icons/maskable-512.png"),
 ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(APP_SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL_FILES))
+    caches.open(APP_SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL_URLS))
   );
   self.skipWaiting();
 });
@@ -26,65 +38,56 @@ self.addEventListener("activate", (event) => {
     const keys = await caches.keys();
     await Promise.all(
       keys
-        .filter((k) => k !== APP_SHELL_CACHE && k !== RUNTIME_CACHE)
+        .filter((k) => ![APP_SHELL_CACHE, RUNTIME_CACHE].includes(k))
         .map((k) => caches.delete(k))
     );
     await self.clients.claim();
   })());
 });
 
-// Helper: respond with cached fallback to index.html for SPA routes (optional)
-async function navigationHandler(request) {
+// Navigation: network-first, fallback to cached index.html
+async function handleNavigate(request) {
   try {
-    const response = await fetch(request);
+    const fresh = await fetch(request);
     const cache = await caches.open(RUNTIME_CACHE);
-    cache.put(request, response.clone());
-    return response;
-  } catch (err) {
-    // If offline, serve cached index.html (good for SPAs). If not SPA, remove this.
-    const cached = await caches.match("/index.html");
-    return cached || Response.error();
+    cache.put(request, fresh.clone());
+    return fresh;
+  } catch {
+    // IMPORTANT: use the scoped index.html, not "/index.html"
+    return (await caches.match(u("./index.html"))) || Response.error();
   }
 }
 
 self.addEventListener("fetch", (event) => {
-  const { request } = event;
+  const req = event.request;
+  if (req.method !== "GET") return;
 
-  // Only handle GET
-  if (request.method !== "GET") return;
+  const url = new URL(req.url);
 
-  const url = new URL(request.url);
-
-  // Ignore non-same-origin requests (or handle if you want)
+  // Only same-origin
   if (url.origin !== self.location.origin) return;
 
-  // Navigation requests: network-first with offline fallback
-  if (request.mode === "navigate") {
-    event.respondWith(navigationHandler(request));
+  // SPA/doc navigations
+  if (req.mode === "navigate") {
+    event.respondWith(handleNavigate(req));
     return;
   }
 
-  // App-shell files: cache-first
-  if (APP_SHELL_FILES.includes(url.pathname) || url.pathname.startsWith("/icons/")) {
-    event.respondWith((async () => {
-      const cached = await caches.match(request);
-      return cached || fetch(request);
-    })());
-    return;
-  }
-
-  // Everything else: stale-while-revalidate
+  // Cache-first for app shell assets
   event.respondWith((async () => {
-    const cache = await caches.open(RUNTIME_CACHE);
-    const cached = await cache.match(request);
-    const networkFetch = fetch(request).then((response) => {
-      // Cache only successful, basic responses
-      if (response && response.status === 200 && response.type === "basic") {
-        cache.put(request, response.clone());
-      }
-      return response;
-    }).catch(() => null);
+    const cached = await caches.match(req);
+    if (cached) return cached;
 
-    return cached || (await networkFetch) || Response.error();
+    try {
+      const res = await fetch(req);
+      // Cache successful basic files
+      if (res && res.status === 200 && res.type === "basic") {
+        const cache = await caches.open(RUNTIME_CACHE);
+        cache.put(req, res.clone());
+      }
+      return res;
+    } catch {
+      return Response.error();
+    }
   })());
 });
