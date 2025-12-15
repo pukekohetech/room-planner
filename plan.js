@@ -240,14 +240,14 @@ function ensureFeatureLabel(feature) {
   label.dataset.featureLabel = feature.dataset.featureId;
 
   // Styling (readable over anything)
-  label.setAttribute("font-size", "10");
+  label.setAttribute("font-size", "8");
   label.setAttribute("text-anchor", "middle");
   label.setAttribute("dominant-baseline", "middle");
   label.setAttribute("fill", "black");
 
   // white outline so it reads anywhere
   label.setAttribute("stroke", "white");
-  label.setAttribute("stroke-width", "3");
+  label.setAttribute("stroke-width", "2");
   label.setAttribute("paint-order", "stroke");
 
   // labels should never block clicking/dragging
@@ -256,8 +256,8 @@ function ensureFeatureLabel(feature) {
   svg.appendChild(label);
   return label;
 }
-
-function updateFeatureLabel(feature) {
+// --- single source of truth ---
+function updateFeatureLabelCore(feature, opts = {}) {
   const label = ensureFeatureLabel(feature);
 
   const x = parseFloat(feature.getAttribute("x"));
@@ -268,161 +268,78 @@ function updateFeatureLabel(feature) {
 
   if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h)) return;
 
-  // Centre along the feature
   const cx = x + w / 2;
   const cy = y + h / 2;
 
-  // Label text: use the true opening length (dataset) when present
+  // Text: true opening length preferred
   const lengthPx = parseFloat(feature.dataset.lengthPx) ||
     (side === "top" || side === "bottom" ? w : h);
 
   const lengthM = lengthPx * SCALE_M_PER_PX;
   label.textContent = isFinite(lengthM) ? `${lengthM.toFixed(2)}m` : "";
 
-  // Push label OFF the feature so it doesn't overlap the rectangle
-  // (door thickness is usually 6px, window 4px in your helpers)
-  const thickness = getFeatureThickness(feature) || 6;
-
-  // Extra clearance so the text never sits on the feature outline
-  const clearance = 10;
-  const offset = (thickness / 2) + clearance;
-
-  // Reset any rotation first
+  // Reset transforms each time
   label.setAttribute("transform", "");
 
+  // --- positioning policy ---
+  const mode = opts.mode || "pushOff"; // "pushOff" or "rotateSides"
+
+  if (mode === "rotateSides") {
+    // Matches your 2nd version behaviour:
+    // top/bottom: outside rect; left/right: rotated -90 + translate
+    const offset = isFinite(opts.offset) ? opts.offset : 14;
+
+    if (side === "top" || side === "bottom") {
+      const ty = side === "top" ? (y - offset) : (y + h + offset);
+      label.setAttribute("x", cx);
+      label.setAttribute("y", ty);
+    } else {
+      const baseX = cx;
+      const baseY = cy;
+      const translate = side === "left" ? -offset : offset;
+
+      label.setAttribute("x", baseX);
+      label.setAttribute("y", baseY);
+      label.setAttribute(
+        "transform",
+        `rotate(-90 ${baseX} ${baseY}) translate(${translate} 0)`
+      );
+    }
+
+    return;
+  }
+
+  // Default "pushOff" mode (your 1st version behaviour):
+  // keep text horizontal; move away from the feature using thickness+clearance
+  const thickness = opts.thickness ??
+    (typeof getFeatureThickness === "function" ? (getFeatureThickness(feature) || 6) : 6);
+
+  const clearance = isFinite(opts.clearance) ? opts.clearance : 10;
+  const offset = (thickness / 2) + clearance;
+
   if (side === "top") {
-    // feature sits around the top wall line: move label upward
     label.setAttribute("x", cx);
     label.setAttribute("y", cy - offset);
   } else if (side === "bottom") {
-    // move label downward
     label.setAttribute("x", cx);
     label.setAttribute("y", cy + offset);
   } else if (side === "left") {
-    // keep text horizontal; move left
     label.setAttribute("x", cx - offset);
     label.setAttribute("y", cy);
   } else if (side === "right") {
-    // move right
     label.setAttribute("x", cx + offset);
     label.setAttribute("y", cy);
   } else {
-    // fallback
     label.setAttribute("x", cx);
     label.setAttribute("y", cy - offset);
   }
 }
 
-function removeFeatureLabel(feature) {
-  const label = getFeatureLabel(feature);
-  if (label) svg.removeChild(label);
-}
-
-
-function refreshAllPlanLabels() {
-  // Rooms: ensure label exists + position it
-  svg.querySelectorAll('rect[data-room]:not([data-feature])').forEach(rect => {
-    const id = rect.dataset.room;
-    if (!id) return;
-
-    // If label missing (common.js restore often doesn’t recreate it), rebuild it
-    let label = svg.querySelector(`text[data-room-label="${id}"]`);
-    if (!label) {
-      label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      label.dataset.room = id;
-      label.dataset.roomLabel = id;
-      label.setAttribute("text-anchor", "middle");
-      label.setAttribute("dominant-baseline", "middle");
-      label.setAttribute("font-size", "8");
-      label.setAttribute("fill", "black");
-      label.setAttribute("pointer-events", "auto");
-      label.style.cursor = "pointer";
-
-      const nameTspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
-      nameTspan.dataset.role = "room-name";
-      nameTspan.setAttribute("x", 0);
-      nameTspan.setAttribute("dy", "-0.3em");
-
-      const sizeTspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
-      sizeTspan.dataset.role = "room-size";
-      sizeTspan.setAttribute("x", 0);
-      sizeTspan.setAttribute("dy", "1.2em");
-
-      label.appendChild(nameTspan);
-      label.appendChild(sizeTspan);
-
-      label.addEventListener("pointerdown", (e) => e.stopPropagation());
-      attachRoomLabelEvents(label, id); // from common.js
-
-      svg.appendChild(label);
-    }
-
-    updateRoomLabel(rect); // positions + updates text
-  });
-
-  // Features: ensure/update labels
-  svg.querySelectorAll('rect[data-feature]').forEach(f => {
-    updateFeatureLabel(f);
-  });
-}
-
-
-function ensureFeatureLabel(feature) {
-  let label = getFeatureLabel(feature);
-  if (label) return label;
-
-  label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-  label.dataset.featureLabel = feature.dataset.featureId;
-
-  // mark so common.js clearing can remove it safely
-  label.classList.add("feature-label");
-  label.setAttribute("data-feature-label", feature.dataset.featureId);
-
-  label.setAttribute("font-size", "10");
-  label.setAttribute("fill", "black");
-  label.setAttribute("text-anchor", "middle");
-  label.style.pointerEvents = "none";
-  svg.appendChild(label);
-  return label;
-}
-
+// --- keep BOTH names used by the rest of the codebase ---
 function updateFeatureLabel(feature) {
-  const label = ensureFeatureLabel(feature);
-
-  const x = parseFloat(feature.getAttribute("x"));
-  const y = parseFloat(feature.getAttribute("y"));
-  const w = parseFloat(feature.getAttribute("width"));
-  const h = parseFloat(feature.getAttribute("height"));
-  const side = feature.dataset.side;
-
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-
-  const lengthPx = parseFloat(feature.dataset.lengthPx) ||
-    (side === "top" || side === "bottom" ? w : h);
-  const lengthM = lengthPx * SCALE_M_PER_PX;
-
-  label.textContent = isFinite(lengthM) ? `${lengthM.toFixed(2)}m` : "";
-
-  const offset = 14;
-  label.setAttribute("transform", "");
-
-  if (side === "top" || side === "bottom") {
-    const ty = side === "top" ? (y - offset) : (y + h + offset);
-    label.setAttribute("x", cx);
-    label.setAttribute("y", ty);
-  } else {
-    const baseX = cx;
-    const baseY = cy;
-    const translate = side === "left" ? -offset : offset;
-
-    label.setAttribute("x", baseX);
-    label.setAttribute("y", baseY);
-    label.setAttribute(
-      "transform",
-      `rotate(-90 ${baseX} ${baseY}) translate(${translate} 0)`
-    );
-  }
+  // pick ONE behaviour here and everything uses it consistently:
+  // updateFeatureLabelCore(feature, { mode: "rotateSides", offset: 14 });
+  updateFeatureLabelCore(feature, { mode: "pushOff", clearance: 10 });
 }
 
 function removeFeatureLabel(feature) {
@@ -1388,7 +1305,8 @@ if (resetBtn) {
   .forEach(ensureRoomRectLooksLikeARoom);
 
   // 3) Recreate any missing labels (rooms + features)
-  refreshAllPlanLabels?.();
+  
+  rebuildPlanLabelsAndBindings?.();
 
   // 4) Install zoom AFTER svg exists
   installPlanViewZoom?.(svg);

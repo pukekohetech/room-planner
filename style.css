@@ -461,11 +461,11 @@ button:active {
   fill: rgb(0,0,255);
   pointer-events: none;
   font-weight: 500;
-  font-size: 3px;
+  font-size: 6px;
 }
 
 .wall-label tspan,
-.floor-label tspan { font-size: 4px; }
+.floor-label tspan { font-size: 6px; }
 
 .wall-label.disabled,
 .floor-label.disabled { opacity: 0.35; }

@@ -349,7 +349,7 @@ function rebuildWallsView() {
     label.setAttribute("x", cx);
     label.setAttribute("y", cy);
     label.setAttribute("text-anchor", "middle");
-    label.setAttribute("font-size", "2px");
+    label.setAttribute("font-size", "4px");
     label.setAttribute("font-family", "Arial, sans-serif");
     label.setAttribute("fill", "rgb(0,0,255)");
     label.classList.add("wall-label", enabled ? "enabled" : "disabled");
@@ -542,7 +542,7 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
     label.setAttribute("x", cx);
     label.setAttribute("y", cy);
     label.setAttribute("text-anchor", "middle");
-    label.setAttribute("font-size", "2px");
+    label.setAttribute("font-size", "4px");
     label.setAttribute("font-family", "Arial, sans-serif");
     label.setAttribute("fill", "rgb(0,0,255)");
     label.classList.add("floor-label", enabled ? "enabled" : "disabled");
@@ -682,3 +682,4 @@ function initWallsView() {
 
 document.addEventListener("DOMContentLoaded", initWallsView);
 window.rebuildWallsView = rebuildWallsView; // handy for debugging
+
