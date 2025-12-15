@@ -1,52 +1,79 @@
-const CACHE_VERSION = "v5";
-const APP_SHELL_CACHE = `app-shell-${CACHE_VERSION}`;
-const RUNTIME_CACHE = `runtime-${CACHE_VERSION}`;
+// sw.js
+const CACHE_VERSION = "v1.0.0";
+const APP_CACHE = `room-planner-${CACHE_VERSION}`;
 
+// IMPORTANT: these are paths relative to the GitHub Pages project root
+const APP_SHELL = [
+  "/room-planner/",
+  "/room-planner/index.html",
+  "/room-planner/style.css",
+  "/room-planner/common.js",
+  "/room-planner/plan.js",
+  "/room-planner/walls.js",
+  "/room-planner/register-sw.js",
+  "/room-planner/manifest.webmanifest",
 
-// Use relative paths so it works under /quizmaker/ on GitHub Pages
-const ASSETS = [
-  './',
-  './index.html',
-  './styles.css',
-  './common.js',
-  './plan.js',
-  './walls.js',
-  './manifest.webmanifest',
-  './icons/icon-192.png',
-  './icons/icon-512.png'
+  // icons (adjust if your filenames differ)
+  "/room-planner/icons/icon-192.png",
+  "/room-planner/icons/icon-512.png"
 ];
 
-
-self.addEventListener('install', event => {
+self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS))
+    caches.open(APP_CACHE).then((cache) => cache.addAll(APP_SHELL))
   );
+  self.skipWaiting();
 });
 
-self.addEventListener('activate', event => {
+self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(
         keys
-          .filter(key => key !== CACHE_NAME)
-          .map(key => caches.delete(key))
-      )
-    )
+          .filter((k) => k.startsWith("room-planner-") && k !== APP_CACHE)
+          .map((k) => caches.delete(k))
+      );
+      await self.clients.claim();
+    })()
   );
 });
 
-self.addEventListener('fetch', event => {
-  const { request } = event;
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  const url = new URL(req.url);
 
-  // Only handle GET
-  if (request.method !== 'GET') {
+  // Only handle same-origin requests
+  if (url.origin !== self.location.origin) return;
+
+  // 1) Navigations: network-first, fallback to cached index
+  if (req.mode === "navigate") {
+    event.respondWith(
+      (async () => {
+        try {
+          const fresh = await fetch(req);
+          const cache = await caches.open(APP_CACHE);
+          cache.put("/room-planner/index.html", fresh.clone());
+          return fresh;
+        } catch {
+          const cached = await caches.match("/room-planner/index.html");
+          return cached || new Response("Offline", { status: 503 });
+        }
+      })()
+    );
     return;
   }
 
+  // 2) Static assets: cache-first, then network
   event.respondWith(
-    caches.match(request).then(cached => {
+    (async () => {
+      const cached = await caches.match(req, { ignoreSearch: true });
       if (cached) return cached;
-      return fetch(request).catch(() => cached);
-    })
+
+      const fresh = await fetch(req);
+      const cache = await caches.open(APP_CACHE);
+      cache.put(req, fresh.clone());
+      return fresh;
+    })()
   );
 });
