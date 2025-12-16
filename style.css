@@ -1,47 +1,53 @@
-/* Floor Plan Builder – Light Theme (cleaned) */
+/* Floor Plan Builder – Light Theme (Organized & Commented) */
 
-/* ========== Design tokens ========== */
+/* ========================================
+   1. Design Tokens
+   ======================================== */
 :root {
-  /* Surfaces */
-  --bg: #f4f6f8;
-  --surface: #ffffff;
-  --surface-2: #fbfbfc;
+  /* Surfaces & Backgrounds */
+  --bg: #f4f6f8;                  /* Page background */
+  --surface: #ffffff;             /* Primary panels/cards */
+  --surface-2: #fbfbfc;           /* Slightly different surface (e.g., size editor) */
 
-  /* Lines */
-  --border: #d9dee5;
-  --border-2: #d6d6d6;
+  /* Borders & Lines */
+  --border: #d9dee5;              /* Main borders */
+  --border-2: #d6d6d6;             /* Secondary/subtle borders */
 
-  /* Text */
-  --text: #111827;
-  --muted: #6b7280;
+  /* Text Colors */
+  --text: #111827;                /* Primary text */
+  --muted: #6b7280;               /* Secondary/muted text */
 
-  /* Brand */
-  --brand: #2563eb;
-  --brand-soft: rgba(37, 99, 235, 0.12);
-  --brand-hover: #1d4ed8;
-  --brand-active: #1e40af;
+  /* Brand (Primary Action Color) */
+  --brand: #2563eb;               /* Default blue */
+  --brand-soft: rgba(37, 99, 235, 0.12); /* Soft background for active states */
+  --brand-hover: #1d4ed8;         /* Hover state */
+  --brand-active: #1e40af;        /* Active/pressed state */
 
-  /* Danger */
-  --danger: #dc2626;
-  --danger-soft: rgba(220, 38, 38, 0.14);
+  /* Danger / Error */
+  --danger: #dc2626;              /* Red for delete/danger actions */
+  --danger-soft: rgba(220, 38, 38, 0.14); /* Soft background for danger buttons */
 
-  /* Depth */
-  --shadow: 0 10px 28px rgba(16, 24, 40, 0.10);
-  --shadow-soft: 0 6px 16px rgba(16, 24, 40, 0.08);
-  --paper-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 12px 28px rgba(0,0,0,0.06);
+  /* Shadows & Depth */
+  --shadow: 0 10px 28px rgba(16, 24, 40, 0.10);         /* Strong elevation */
+  --shadow-soft: 0 6px 16px rgba(16, 24, 40, 0.08);     /* Gentle elevation */
+  --paper-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 12px 28px rgba(0,0,0,0.06); /* Card-like paper effect */
 
-  /* Shape */
-  --radius: 14px;
-  --radius-sm: 10px;
+  /* Border Radius */
+  --radius: 14px;                 /* Large rounded corners (cards, wrappers) */
+  --radius-sm: 10px;              /* Smaller radius (buttons, inputs) */
 
-  /* Touch */
-  --tap: 44px; /* comfortable minimum target */
+  /* Touch Targets */
+  --tap: 44px;                    /* Minimum comfortable touch target size */
 }
 
-/* ========== Base reset ========== */
+/* ========================================
+   2. Base Reset & Typography
+   ======================================== */
 *,
 *::before,
-*::after { box-sizing: border-box; }
+*::after {
+  box-sizing: border-box;
+}
 
 html, body {
   height: 100%;
@@ -55,21 +61,21 @@ body {
   color: var(--text);
 }
 
-/* Reduce tap highlight on mobile */
+/* Remove default tap highlight on interactive elements (improves mobile feel) */
 button, a, svg, #floorplanWrapper, #wallsWrapper {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* ========== Header ========== */
+/* ========================================
+   3. Header
+   ======================================== */
 #app-header {
   position: sticky;
   top: 0;
   z-index: 10;
-
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-soft);
-
   padding: 0.75rem 1rem;
   backdrop-filter: blur(8px);
 }
@@ -77,12 +83,10 @@ button, a, svg, #floorplanWrapper, #wallsWrapper {
 .header-content {
   max-width: 1400px;
   margin: 0 auto;
-
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-
   gap: 1rem;
 }
 
@@ -100,23 +104,28 @@ button, a, svg, #floorplanWrapper, #wallsWrapper {
   opacity: 0.92;
 }
 
+/* Responsive adjustments for small screens */
 @media (max-width: 600px) {
-  .header-content { flex-direction: column; text-align: center; }
+  .header-content {
+    flex-direction: column;
+    text-align: center;
+  }
   #app-header h1 { font-size: 1.3rem; }
   .school-label { font-size: 1rem; }
 }
 
-/* ========== Layout ========== */
+/* ========================================
+   4. Overall Layout
+   ======================================== */
 #app {
   display: flex;
   gap: 1rem;
   align-items: flex-start;
 }
 
-/* Sidebar width reduced */
 #sidebar {
-  width: 240px;       /* was 300px */
-  max-width: 85vw;    /* prevents overflowing on small screens */
+  width: 240px;           /* Slimmer than original */
+  max-width: 85vw;        /* Prevent overflow on narrow screens */
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -124,7 +133,7 @@ button, a, svg, #floorplanWrapper, #wallsWrapper {
 
 #main {
   flex: 1;
-  min-width: 0;
+  min-width: 0;           /* Allows flex shrinking */
 }
 
 @media (max-width: 900px) {
@@ -132,12 +141,13 @@ button, a, svg, #floorplanWrapper, #wallsWrapper {
   #sidebar { width: 100%; max-width: 100%; }
 }
 
-/* Optional: slightly slimmer sidebar on phones */
 @media (max-width: 600px) {
   #sidebar { width: 210px; max-width: 92vw; }
 }
 
-/* ========== Shared panels ========== */
+/* ========================================
+   5. Shared Panel Styles
+   ======================================== */
 #controls,
 #sizeEditor,
 #featureInfo,
@@ -150,8 +160,9 @@ button, a, svg, #floorplanWrapper, #wallsWrapper {
   padding: 1rem;
 }
 
+/* Slight variations */
 #sizeEditor { background: var(--surface-2); }
-#featureInfo { background: rgba(37, 99, 235, 0.06); }
+#featureInfo { background: rgba(37, 99, 235, 0.06); } /* Light brand tint */
 
 #wallsHint {
   border-style: dashed;
@@ -164,22 +175,24 @@ button, a, svg, #floorplanWrapper, #wallsWrapper {
   opacity: 0.9;
 }
 
-/* ========== Controls (slimmer toolbar) ========== */
+/* ========================================
+   6. Controls Toolbar (Slimmer)
+   ======================================== */
 #controls {
   display: flex;
   flex-direction: column;
-  gap: 6px;        /* slimmer */
-  padding: 8px;    /* slimmer */
+  gap: 6px;
+  padding: 8px;
 }
 
 #controls button:first-child { margin-bottom: 2px; }
 
-/* Toggle rows */
+/* Toggle rows (label + switch) */
 .toggle-control {
   width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between; /* label left, switch right */
+  justify-content: space-between;
   gap: 10px;
   margin: 6px 0;
   font-weight: 650;
@@ -200,7 +213,7 @@ button, a, svg, #floorplanWrapper, #wallsWrapper {
   font-size: 12px;
 }
 
-/* Student name + scale */
+/* Labels for student name & scale */
 .student-name-label,
 .scale-label { width: 100%; }
 
@@ -217,7 +230,9 @@ button, a, svg, #floorplanWrapper, #wallsWrapper {
   margin-top: 2px;
 }
 
-/* ========== Inputs ========== */
+/* ========================================
+   7. Form Inputs & Labels
+   ======================================== */
 #sizeEditor label,
 #featureInfo label {
   display: flex;
@@ -229,9 +244,9 @@ button, a, svg, #floorplanWrapper, #wallsWrapper {
 }
 
 input {
-  height: 30px;              /* slimmer */
-  padding: 3px 8px;          /* slimmer */
-  font-size: 13px;           /* slimmer */
+  height: 30px;
+  padding: 3px 8px;
+  font-size: 13px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: #fff;
@@ -244,13 +259,13 @@ input:focus {
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.14);
 }
 
+/* Specific input widths */
 #roomNameInput { width: 100%; }
 #widthInput,
 #heightInput,
 #featureWidthInput,
 #featureOffsetInput,
 #featureHeadInput { width: 5.5rem; }
-
 #wallsControls input { width: 4.5rem; }
 
 .panel-buttons {
@@ -259,12 +274,14 @@ input:focus {
   flex-wrap: wrap;
 }
 
-/* ========== Toggle switch (slightly smaller) ========== */
+/* ========================================
+   8. Toggle Switch (Compact)
+   ======================================== */
 .switch {
   position: relative;
   display: inline-block;
-  width: 44px;   /* was 48px */
-  height: 24px;  /* was 26px */
+  width: 44px;
+  height: 24px;
 }
 
 .switch input {
@@ -285,8 +302,8 @@ input:focus {
 .slider:before {
   content: "";
   position: absolute;
-  height: 18px;   /* was 20px */
-  width: 18px;    /* was 20px */
+  height: 18px;
+  width: 18px;
   left: 3px;
   bottom: 3px;
   background-color: #fff;
@@ -298,31 +315,28 @@ input:focus {
 input:checked + .slider { background-color: var(--brand); }
 input:checked + .slider:before { transform: translateX(20px); }
 
-/* ========== Buttons (slimmer in sidebar) ========== */
+/* ========================================
+   9. Buttons
+   ======================================== */
 button {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-
   min-height: var(--tap);
   padding: 0.75rem 1rem;
-
   font-size: 0.95rem;
   font-weight: 600;
-
   cursor: pointer;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-
   background: var(--surface);
   color: var(--text);
-
   box-shadow: var(--shadow-soft);
   transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
 }
 
-/* Slim buttons specifically in controls */
+/* Slimmer buttons inside the controls toolbar */
 #controls button {
   min-height: 32px;
   padding: 4px 8px;
@@ -330,12 +344,12 @@ button {
   line-height: 1;
 }
 
-/* Slim SVG icons in controls */
 #controls button svg {
   width: 14px;
   height: 14px;
 }
 
+/* Interaction states */
 button:hover {
   box-shadow: var(--shadow);
   transform: translateY(-1px);
@@ -346,6 +360,7 @@ button:active {
   box-shadow: var(--shadow-soft);
 }
 
+/* Button variants */
 .primary-btn {
   background: var(--brand);
   color: #fff;
@@ -367,10 +382,12 @@ button:active {
   border-color: var(--danger);
 }
 
-/* ========== Editor panels ========== */
+/* ========================================
+   10. Editor Panels (Size & Feature Info)
+   ======================================== */
 #sizeEditor,
 #featureInfo {
-  display: none; /* toggled by JS */
+  display: none; /* Shown/hidden via JS */
   flex-direction: column;
   gap: 0.6rem;
   font-size: 0.95rem;
@@ -382,20 +399,21 @@ button:active {
   letter-spacing: 0.2px;
 }
 
-/* ========== Canvas wrappers ========== */
+/* ========================================
+   11. Canvas Wrappers & SVGs
+   ======================================== */
 #floorplanWrapper,
 #wallsWrapper {
   width: 100%;
   overflow: auto;
-
   border-radius: var(--radius);
   border: 1px solid var(--border-2);
   background: #ffffff;
-
   box-shadow: var(--paper-shadow);
   position: relative;
 }
 
+/* Inner subtle inset shadow */
 #floorplanWrapper::before,
 #wallsWrapper::before {
   content: "";
@@ -406,11 +424,7 @@ button:active {
   box-shadow: inset 0 0 0 1px rgba(0,0,0,0.03);
 }
 
-#floorplanWrapper {
-  max-height: 62vh;
-  margin-bottom: 1rem;
-}
-
+#floorplanWrapper { max-height: 62vh; margin-bottom: 1rem; }
 #wallsWrapper { height: 420px; }
 
 #floorplan,
@@ -421,7 +435,7 @@ button:active {
   cursor: default;
 }
 
-/* Grid on floorplan only */
+/* Grid background on main floorplan only */
 #floorplan {
   background-image:
     linear-gradient(rgba(0,0,0,0.05) 1px, transparent 1px),
@@ -429,7 +443,7 @@ button:active {
   background-size: 50px 50px;
 }
 
-/* Walls panel controls */
+/* Walls panel specific controls */
 #wallsPanel { margin-top: 0.35rem; }
 
 #wallsControls {
@@ -441,7 +455,9 @@ button:active {
   color: var(--muted);
 }
 
-/* ========== Laser-cut styles ========== */
+/* ========================================
+   12. Laser-Cut Export Styles
+   ======================================== */
 .wall-strip,
 .floor-strip {
   fill: none !important;
@@ -470,7 +486,9 @@ button:active {
 .wall-label.disabled,
 .floor-label.disabled { opacity: 0.35; }
 
-/* ========== Scrollbars (desktop WebKit) ========== */
+/* ========================================
+   13. Custom Scrollbars (WebKit desktop)
+   ======================================== */
 #floorplanWrapper::-webkit-scrollbar,
 #wallsWrapper::-webkit-scrollbar {
   width: 10px;
@@ -494,15 +512,38 @@ button:active {
   background: #b7bfca;
 }
 
-/* ========== Touch/drag behaviour ========== */
-#floorplan { touch-action: none; }          /* prevents scroll while dragging rooms */
-#floorplanWrapper { touch-action: pan-x pan-y; } /* allows scroll when touching empty space */
+/* ========================================
+   14. Touch & Interaction Behaviors
+   ======================================== */
+/* Prevent page scroll while dragging inside the canvas */
+#floorplan { touch-action: none; }
+/* Allow horizontal/vertical scrolling when touching empty wrapper space */
+#floorplanWrapper { touch-action: pan-x pan-y; }
 
+/* Room/feature fill colors */
 #floorplan rect[data-room]:not([data-feature]) { fill: rgba(0,0,0,0); }
 #floorplan rect[data-feature] { fill: #80c0ff; }
 #floorplan rect[data-feature][data-feature="door"] { fill: #c08040; }
 
-/* ========== Print ========== */
+/* Room grab handles (invisible hit-area with hover feedback) */
+#floorplan rect[data-room]:not([data-feature]):not(.wall-strip):not(.floor-strip) {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 4px;          /* Large clickable area */
+  fill: rgba(0,0,0,0);        /* Transparent */
+}
+
+#floorplan rect[data-room]:not([data-feature]):not(.wall-strip):not(.floor-strip):active {
+  cursor: grabbing;
+}
+
+#floorplan rect[data-room]:not([data-feature]):not(.wall-strip):not(.floor-strip):hover {
+  stroke: rgba(37, 99, 235, 0.5);
+  stroke-dasharray: 4 3;
+}
+
+/* ========================================
+   15. Print Styles
+   ======================================== */
 @media print {
   body { background: #fff; }
 
@@ -518,24 +559,4 @@ button:active {
     box-shadow: none !important;
     border: none !important;
   }
-}
-
-/* Room grab area (ONLY rooms) */
-#floorplan rect[data-room]:not([data-feature]):not(.wall-strip):not(.floor-strip) {
-  /*cursor: grab;*/
-  vector-effect: non-scaling-stroke;
-
-  /* invisible but clickable hit area */
-  
-  stroke-width: 4px;
-  fill: rgba(0,0,0,0);
-}
-
-#floorplan rect[data-room]:not([data-feature]):not(.wall-strip):not(.floor-strip):active {
-  cursor: grabbing;
-}
-
-#floorplan rect[data-room]:not([data-feature]):not(.wall-strip):not(.floor-strip):hover {
-  stroke: rgba(37, 99, 235, 0.5);
-  stroke-dasharray: 4 3;
-}
+  }
