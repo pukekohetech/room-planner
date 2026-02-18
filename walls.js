@@ -430,6 +430,7 @@ function rebuildWallsView() {
         }
 
         const holeRect = document.createElementNS(ns, "rect");
+        holeRect.classList.add("hole-rect");
         holeRect.setAttribute("x", holeX);
         holeRect.setAttribute("y", holeY);
         holeRect.setAttribute("width", holeWidth);
@@ -684,6 +685,7 @@ function initWallsView() {
 
 document.addEventListener("DOMContentLoaded", initWallsView);
 window.rebuildWallsView = rebuildWallsView; // handy for debugging
+
 
 
 
