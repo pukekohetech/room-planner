@@ -501,6 +501,11 @@ button {
 .wall-label.disabled,
 .floor-label.disabled { opacity: 0.35; }
 
+/* Door/window hole display (UI only) */
+.hole-rect {
+  stroke-width: 1 !important;
+}
+
 /* ========================================
    13. Custom Scrollbars
    ======================================== */
@@ -565,3 +570,4 @@ button {
     border: none !important;
   }
    }
+
