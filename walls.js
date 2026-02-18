@@ -318,8 +318,8 @@ function rebuildWallsView() {
     wallPath.setAttribute("d", outlineD);
     wallPath.setAttribute("fill", "none");
     wallPath.setAttribute("stroke", "rgb(255,0,0)");
-  wallPath.setAttribute("stroke-width", String(UI_STROKE_PX));
-wallPath.setAttribute("data-export-stroke", String(EXPORT_STROKE_U));
+  wallPath.setAttribute("stroke-width", "1";
+wallPath.setAttribute("data-export-stroke", "0.026");
 
     wallPath.dataset.wallId = wallKey;
     wallPath.classList.add("wall-strip", enabled ? "enabled" : "disabled");
@@ -689,6 +689,7 @@ function initWallsView() {
 
 document.addEventListener("DOMContentLoaded", initWallsView);
 window.rebuildWallsView = rebuildWallsView; // handy for debugging
+
 
 
 
