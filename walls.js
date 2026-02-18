@@ -7,8 +7,6 @@
           wallVisibility, floorVisibility, currentStudentName,
           DOOR_HEIGHT_M, WINDOW_HEAD_DEFAULT_M, WINDOW_HEIGHT_DEFAULT_M,
           getMaterialThicknessMm, getRoomDisplayName, requestAutoSave */
-const UI_STROKE_PX = 1;          // what you SEE in the app
-const EXPORT_STROKE_U = 0.026;   // what gets WRITTEN to the exported SVG
 
 // ---------- Pointer type ----------
 const IS_COARSE_POINTER =
@@ -318,9 +316,7 @@ function rebuildWallsView() {
     wallPath.setAttribute("d", outlineD);
     wallPath.setAttribute("fill", "none");
     wallPath.setAttribute("stroke", "rgb(255,0,0)");
-  wallPath.setAttribute("stroke-width", "1";
-wallPath.setAttribute("data-export-stroke", "0.026");
-
+    wallPath.setAttribute("stroke-width", "0.026");
     wallPath.dataset.wallId = wallKey;
     wallPath.classList.add("wall-strip", enabled ? "enabled" : "disabled");
     setExportFlag(wallPath, enabled);
@@ -440,9 +436,7 @@ wallPath.setAttribute("data-export-stroke", "0.026");
         holeRect.setAttribute("height", holeHeight);
         holeRect.setAttribute("fill", "none");
         holeRect.setAttribute("stroke", "rgb(255,0,0)");
-        holeRect.setAttribute("stroke-width", "1";          // keep 1px on screen
-        holeRect.setAttribute("data-export-stroke", "0.026"; // export hairline
-
+        holeRect.setAttribute("stroke-width", "0.026");
         setExportFlag(holeRect, true);
         wallsSvg.appendChild(holeRect);
       });
@@ -519,8 +513,7 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
     floorRect.classList.add("floor-strip", enabled ? "enabled" : "disabled");
     floorRect.setAttribute("fill", "none");
     floorRect.setAttribute("stroke", "rgb(255,0,0)");
-    floorRect.setAttribute("stroke-width", "1");
-floorRect.setAttribute("data-export-stroke", "0.026");
+    floorRect.setAttribute("stroke-width", "0.026");
     setExportFlag(floorRect, enabled);
 
     const hit = makeFatHitRect(floorX, floorY, wPx, hPx, roomId);
@@ -689,9 +682,6 @@ function initWallsView() {
 
 document.addEventListener("DOMContentLoaded", initWallsView);
 window.rebuildWallsView = rebuildWallsView; // handy for debugging
-
-
-
 
 
 
