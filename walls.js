@@ -316,7 +316,7 @@ function rebuildWallsView() {
     wallPath.setAttribute("d", outlineD);
     wallPath.setAttribute("fill", "none");
     wallPath.setAttribute("stroke", "rgb(255,0,0)");
-    wallPath.setAttribute("stroke-width", "1");
+    wallPath.setAttribute("stroke-width", "0.026");
     wallPath.dataset.wallId = wallKey;
     wallPath.classList.add("wall-strip", enabled ? "enabled" : "disabled");
     setExportFlag(wallPath, enabled);
@@ -436,7 +436,7 @@ function rebuildWallsView() {
         holeRect.setAttribute("height", holeHeight);
         holeRect.setAttribute("fill", "none");
         holeRect.setAttribute("stroke", "rgb(255,0,0)");
-        holeRect.setAttribute("stroke-width", "1");
+        holeRect.setAttribute("stroke-width", "0.026");
         setExportFlag(holeRect, true);
         wallsSvg.appendChild(holeRect);
       });
@@ -513,7 +513,7 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
     floorRect.classList.add("floor-strip", enabled ? "enabled" : "disabled");
     floorRect.setAttribute("fill", "none");
     floorRect.setAttribute("stroke", "rgb(255,0,0)");
-    floorRect.setAttribute("stroke-width", "1");
+    floorRect.setAttribute("stroke-width", "0.026");
     setExportFlag(floorRect, enabled);
 
     const hit = makeFatHitRect(floorX, floorY, wPx, hPx, roomId);
@@ -682,4 +682,5 @@ function initWallsView() {
 
 document.addEventListener("DOMContentLoaded", initWallsView);
 window.rebuildWallsView = rebuildWallsView; // handy for debugging
+
 
