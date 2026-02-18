@@ -437,7 +437,9 @@ function rebuildWallsView() {
         holeRect.setAttribute("fill", "none");
         holeRect.setAttribute("stroke", "rgb(255,0,0)");
         holeRect.setAttribute("stroke-width", "0.026");
-        setExportFlag(holeRect, true);
+        holeRect.classList.add("wall-strip", enabled ? "enabled" : "disabled");
+        // setExportFlag(wallPath, enabled);
+        setExportFlag(holeRect, enabled);
         wallsSvg.appendChild(holeRect);
       });
     }
@@ -682,5 +684,6 @@ function initWallsView() {
 
 document.addEventListener("DOMContentLoaded", initWallsView);
 window.rebuildWallsView = rebuildWallsView; // handy for debugging
+
 
 
