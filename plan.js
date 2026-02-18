@@ -1,53 +1,76 @@
 // ==========================================================
-// PLAN VIEW: Rooms, doors, windows, editors, snapping
+// plan.js (REWRITE)
+// Plan view editor + doors/windows + snapping + zoom/pan
+// Export guarantees hairline stroke-width = 0.026mm
+//
 // Requires: common.js loaded first, walls.js available
 // ==========================================================
 
-// ----------------------------------------------------------
-// Feature label helpers (doors/windows)
-// ----------------------------------------------------------
+// ------------------------------
+// GLOBAL STYLING + EXPORT CONFIG
+// ------------------------------
 
-// ---------- Feature label helpers (doors/windows) ----------
+// Readable editor line weight (what you see while editing)
+const UI_STROKE_PX = 3;
 
-// ==========================================================
-// Keyboard nudge (arrow keys) for rooms
-// - Moves selected room with arrow keys
-// - Shift = bigger step
-// - Join mode: moves ALL rooms together
-// - Updates labels + features + walls view + autosave
-// ==========================================================
+// Export hairline requirement (physical)
+const EXPORT_STROKE_MM = 0.026;
 
+// SVG user units conversion:
+// Your drawing coordinates behave like CSS px / viewBox units.
+// 1 CSS px = 1/96 inch = 25.4/96 mm
+const PX_PER_MM = 96 / 25.4;
+const EXPORT_STROKE_U = EXPORT_STROKE_MM * PX_PER_MM; // ≈ 0.0982677 user units
 
-// ----------------------------------------------------------
-// Ensure room rect has visible plan styling
-// (fixes rooms that exist but have invisible walls)
-// ----------------------------------------------------------
+// Labels: keep readable in UI; export will remove label outline stroke.
+const UI_LABEL_FONT_SIZE = 8;
+const UI_LABEL_OUTLINE_PX = 2;
+
+// Snap config
+const SNAP_TOUCH_PX = 12;
+const SNAP_ALIGN_PX = 6;
+
+// Hover/resize margin
+const HOVER_MARGIN = 5;
+
+// -----------------------------------------
+// HELPERS: apply consistent room/feature look
+// -----------------------------------------
+function setStroke(el, width, color = "black") {
+  if (!el) return;
+  el.setAttribute("stroke", color);
+  el.setAttribute("stroke-width", String(width));
+}
+
+function setNoFill(el) {
+  if (!el) return;
+  el.setAttribute("fill", "none");
+}
+
 function ensureRoomRectLooksLikeARoom(rect) {
-  if (!rect || !rect.dataset || !rect.dataset.room) return;
-
-  rect.setAttribute("fill", "rgba(0,0,0,0)");
-  rect.setAttribute("stroke", "black");
-  rect.setAttribute("stroke-width", "3");
+  if (!rect?.dataset?.room) return;
+  setNoFill(rect);
+  setStroke(rect, UI_STROKE_PX, "black");
   rect.setAttribute("pointer-events", "bounding-box");
 }
 
+function ensureFeatureRectLooksLikeAFeature(rect) {
+  if (!rect?.dataset?.feature) return;
+  // Feature fill is used for UI differentiation
+  // (door/window). Stroke is optional in UI.
+  // Keep stroke off in UI unless you want it:
+  // setStroke(rect, 1, "black");
+  rect.setAttribute("pointer-events", "visiblePainted");
+}
 
-// ==========================================================
-// PLAN VIEW UI ZOOM + PAN (viewBox only, laser scale unchanged)
-// Wheel = zoom, Drag middle mouse / Space+drag = pan
-// ==========================================================
-const SNAP_TOUCH_PX = 12;   // touching walls (strong)
-const SNAP_ALIGN_PX = 6;    // alignment only (weak)
-
-
-
-
+// -----------------------------------------
+// ZOOM + PAN (viewBox only)
+// -----------------------------------------
 function installPlanViewZoom(svgEl) {
   if (!svgEl) return;
 
-  svgEl.style.touchAction = "none"; // helps trackpad/touch
+  svgEl.style.touchAction = "none";
 
-  // If SVG has no viewBox yet, create one from its rendered size
   if (!svgEl.getAttribute("viewBox")) {
     const w = svgEl.viewBox?.baseVal?.width || svgEl.clientWidth || 800;
     const h = svgEl.viewBox?.baseVal?.height || svgEl.clientHeight || 600;
@@ -59,12 +82,10 @@ function installPlanViewZoom(svgEl) {
     return { x, y, w, h };
   };
   const setVb = (v) => svgEl.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
-
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  // Zoom limits (UI only)
-  const MIN_W = 50;     // zoom in limit
-  const MAX_W = 5000;   // zoom out limit
+  const MIN_W = 50;
+  const MAX_W = 5000;
 
   function getSvgPointFromClient(clientX, clientY) {
     const pt = svgEl.createSVGPoint();
@@ -74,43 +95,47 @@ function installPlanViewZoom(svgEl) {
     return m ? pt.matrixTransform(m.inverse()) : { x: clientX, y: clientY };
   }
 
-  svgEl.addEventListener("wheel", (e) => {
-    e.preventDefault();
+  svgEl.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
 
-    const v = vb();
-    const mouse = getSvgPointFromClient(e.clientX, e.clientY);
+      const v = vb();
+      const mouse = getSvgPointFromClient(e.clientX, e.clientY);
 
-    // Trackpad friendly zoom
-    const zoomFactor = Math.pow(1.0015, e.deltaY);
-    let newW = v.w * zoomFactor;
-    let newH = v.h * zoomFactor;
+      const zoomFactor = Math.pow(1.0015, e.deltaY);
+      let newW = v.w * zoomFactor;
 
-    // Keep aspect
-    const aspect = v.w / v.h;
-    newW = clamp(newW, MIN_W, MAX_W);
-    newH = newW / aspect;
+      const aspect = v.w / v.h;
+      newW = clamp(newW, MIN_W, MAX_W);
+      const newH = newW / aspect;
 
-    // Zoom about mouse point
-    const rx = (mouse.x - v.x) / v.w;
-    const ry = (mouse.y - v.y) / v.h;
+      const rx = (mouse.x - v.x) / v.w;
+      const ry = (mouse.y - v.y) / v.h;
 
-    const newX = mouse.x - rx * newW;
-    const newY = mouse.y - ry * newH;
+      const newX = mouse.x - rx * newW;
+      const newY = mouse.y - ry * newH;
 
-    setVb({ x: newX, y: newY, w: newW, h: newH });
-  }, { passive: false });
+      setVb({ x: newX, y: newY, w: newW, h: newH });
+    },
+    { passive: false }
+  );
 
-  // Pan: middle mouse drag OR Space+drag
+  // Pan: middle mouse OR Space+drag
   let panning = false;
   let panStart = null;
   let vbStart = null;
   let spaceDown = false;
 
-  window.addEventListener("keydown", (e) => { if (e.code === "Space") spaceDown = true; });
-  window.addEventListener("keyup",   (e) => { if (e.code === "Space") spaceDown = false; });
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") spaceDown = true;
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.code === "Space") spaceDown = false;
+  });
 
   svgEl.addEventListener("pointerdown", (e) => {
-    const isMiddle = (e.button === 1);
+    const isMiddle = e.button === 1;
     if (!isMiddle && !spaceDown) return;
 
     panning = true;
@@ -123,7 +148,6 @@ function installPlanViewZoom(svgEl) {
   svgEl.addEventListener("pointermove", (e) => {
     if (!panning || !panStart || !vbStart) return;
 
-    // Convert screen delta to viewBox delta
     const rect = svgEl.getBoundingClientRect();
     const dx = (e.clientX - panStart.x) * (vbStart.w / rect.width);
     const dy = (e.clientY - panStart.y) * (vbStart.h / rect.height);
@@ -143,32 +167,31 @@ function installPlanViewZoom(svgEl) {
   svgEl.addEventListener("pointerup", endPan);
   svgEl.addEventListener("pointercancel", endPan);
 
-  // Optional: quick zoom keys
+  // Quick zoom keys
   window.addEventListener("keydown", (e) => {
     const tag = (e.target?.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || e.target?.isContentEditable) return;
 
     if (e.key === "+" || e.key === "=") {
       const v = vb();
-      setVb({ x: v.x + v.w*0.05, y: v.y + v.h*0.05, w: v.w*0.9, h: v.h*0.9 });
+      setVb({ x: v.x + v.w * 0.05, y: v.y + v.h * 0.05, w: v.w * 0.9, h: v.h * 0.9 });
     }
     if (e.key === "-" || e.key === "_") {
       const v = vb();
-      setVb({ x: v.x - v.w*0.055, y: v.y - v.h*0.055, w: v.w/0.9, h: v.h/0.9 });
+      setVb({ x: v.x - v.w * 0.055, y: v.y - v.h * 0.055, w: v.w / 0.9, h: v.h / 0.9 });
     }
   });
 }
 
-
-
-
-let selectedRoomRect = null; // current room selection for keyboard moves
+// -----------------------------------------
+// Selection + Keyboard Nudge
+// -----------------------------------------
+let selectedRoomRect = null;
 
 function setSelectedRoomRect(rect) {
   selectedRoomRect = rect || null;
 
-  // Optional visual: highlight selected room
-  svg.querySelectorAll('rect[data-room]:not([data-feature])').forEach(r => {
+  svg.querySelectorAll('rect[data-room]:not([data-feature])').forEach((r) => {
     r.classList.toggle("room-selected", r === selectedRoomRect);
   });
 }
@@ -189,9 +212,8 @@ function nudgeSelectedRoom(dx, dy) {
   if (!selectedRoomRect) return;
 
   if (joinedMode) {
-    // Move all rooms together
     const rooms = svg.querySelectorAll('rect[data-room]:not([data-feature])');
-    rooms.forEach(r => nudgeRect(r, dx, dy));
+    rooms.forEach((r) => nudgeRect(r, dx, dy));
   } else {
     nudgeRect(selectedRoomRect, dx, dy);
   }
@@ -200,33 +222,29 @@ function nudgeSelectedRoom(dx, dy) {
   requestAutoSave?.("keyboard nudge");
 }
 
-// Install once
 document.addEventListener("keydown", (e) => {
-  // Don’t steal keys when typing in an input
-  const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
-  const isTyping =
-    tag === "input" || tag === "textarea" || e.target?.isContentEditable;
+  const tag = (e.target?.tagName || "").toLowerCase();
+  const isTyping = tag === "input" || tag === "textarea" || e.target?.isContentEditable;
   if (isTyping) return;
-
-  // Only act if we have a selected room
   if (!selectedRoomRect) return;
 
-  // Steps in PX (your scale converts px->m; keep this as "nudge pixels")
   const step = e.shiftKey ? 10 : 2;
+  let dx = 0,
+    dy = 0;
+  if (e.key === "ArrowLeft") dx = -step;
+  if (e.key === "ArrowRight") dx = step;
+  if (e.key === "ArrowUp") dy = -step;
+  if (e.key === "ArrowDown") dy = step;
 
-  let dx = 0, dy = 0;
-  if (e.key === "ArrowLeft")  dx = -step;
-  if (e.key === "ArrowRight") dx =  step;
-  if (e.key === "ArrowUp")    dy = -step;
-  if (e.key === "ArrowDown")  dy =  step;
-
-  if (dx !== 0 || dy !== 0) {
+  if (dx || dy) {
     e.preventDefault();
     nudgeSelectedRoom(dx, dy);
   }
 });
 
-
+// -----------------------------------------
+// Feature label helpers (doors/windows)
+// -----------------------------------------
 function getFeatureLabel(feature) {
   const fid = feature.dataset.featureId;
   return svg.querySelector(`text[data-feature-label="${fid}"]`);
@@ -239,24 +257,22 @@ function ensureFeatureLabel(feature) {
   label = document.createElementNS("http://www.w3.org/2000/svg", "text");
   label.dataset.featureLabel = feature.dataset.featureId;
 
-  // Styling (readable over anything)
-  label.setAttribute("font-size", "8");
+  label.setAttribute("font-size", String(UI_LABEL_FONT_SIZE));
   label.setAttribute("text-anchor", "middle");
   label.setAttribute("dominant-baseline", "middle");
   label.setAttribute("fill", "black");
 
-  // white outline so it reads anywhere
+  // UI readability outline (EXPORT will remove)
   label.setAttribute("stroke", "white");
-  label.setAttribute("stroke-width", "2");
+  label.setAttribute("stroke-width", String(UI_LABEL_OUTLINE_PX));
   label.setAttribute("paint-order", "stroke");
 
-  // labels should never block clicking/dragging
   label.style.pointerEvents = "none";
 
   svg.appendChild(label);
   return label;
 }
-// --- single source of truth ---
+
 function updateFeatureLabelCore(feature, opts = {}) {
   const label = ensureFeatureLabel(feature);
 
@@ -271,51 +287,20 @@ function updateFeatureLabelCore(feature, opts = {}) {
   const cx = x + w / 2;
   const cy = y + h / 2;
 
-  // Text: true opening length preferred
-  const lengthPx = parseFloat(feature.dataset.lengthPx) ||
-    (side === "top" || side === "bottom" ? w : h);
+  const lengthPx =
+    parseFloat(feature.dataset.lengthPx) || (side === "top" || side === "bottom" ? w : h);
 
   const lengthM = lengthPx * SCALE_M_PER_PX;
   label.textContent = isFinite(lengthM) ? `${lengthM.toFixed(2)}m` : "";
 
-  // Reset transforms each time
   label.setAttribute("transform", "");
 
-  // --- positioning policy ---
-  const mode = opts.mode || "pushOff"; // "pushOff" or "rotateSides"
-
-  if (mode === "rotateSides") {
-    // Matches your 2nd version behaviour:
-    // top/bottom: outside rect; left/right: rotated -90 + translate
-    const offset = isFinite(opts.offset) ? opts.offset : 14;
-
-    if (side === "top" || side === "bottom") {
-      const ty = side === "top" ? (y - offset) : (y + h + offset);
-      label.setAttribute("x", cx);
-      label.setAttribute("y", ty);
-    } else {
-      const baseX = cx;
-      const baseY = cy;
-      const translate = side === "left" ? -offset : offset;
-
-      label.setAttribute("x", baseX);
-      label.setAttribute("y", baseY);
-      label.setAttribute(
-        "transform",
-        `rotate(-90 ${baseX} ${baseY}) translate(${translate} 0)`
-      );
-    }
-
-    return;
-  }
-
-  // Default "pushOff" mode (your 1st version behaviour):
-  // keep text horizontal; move away from the feature using thickness+clearance
-  const thickness = opts.thickness ??
-    (typeof getFeatureThickness === "function" ? (getFeatureThickness(feature) || 6) : 6);
+  const thickness =
+    opts.thickness ??
+    (typeof getFeatureThickness === "function" ? getFeatureThickness(feature) || 6 : 6);
 
   const clearance = isFinite(opts.clearance) ? opts.clearance : 10;
-  const offset = (thickness / 2) + clearance;
+  const offset = thickness / 2 + clearance;
 
   if (side === "top") {
     label.setAttribute("x", cx);
@@ -335,67 +320,49 @@ function updateFeatureLabelCore(feature, opts = {}) {
   }
 }
 
-// --- keep BOTH names used by the rest of the codebase ---
 function updateFeatureLabel(feature) {
-  // pick ONE behaviour here and everything uses it consistently:
-  // updateFeatureLabelCore(feature, { mode: "rotateSides", offset: 14 });
-  updateFeatureLabelCore(feature, { mode: "pushOff", clearance: 10 });
+  updateFeatureLabelCore(feature, { clearance: 10 });
 }
 
 function removeFeatureLabel(feature) {
   const label = getFeatureLabel(feature);
-  if (label && label.parentNode) label.parentNode.removeChild(label);
+  label?.parentNode?.removeChild(label);
 }
 
-// ----------------------------------------------------------
-// Tool button handling
-// ----------------------------------------------------------
-
+// -----------------------------------------
+// Tool buttons
+// -----------------------------------------
 function setTool(tool) {
   currentTool = tool;
-  [addDoorBtn, addWindowBtn].forEach(btn => btn.classList.remove("tool-active"));
-  if (tool === "addDoor")   addDoorBtn.classList.add("tool-active");
+  [addDoorBtn, addWindowBtn].forEach((btn) => btn.classList.remove("tool-active"));
+  if (tool === "addDoor") addDoorBtn.classList.add("tool-active");
   if (tool === "addWindow") addWindowBtn.classList.add("tool-active");
 
-  svg.style.cursor =
-    (tool === "addDoor" || tool === "addWindow") ? "crosshair" : "default";
+  svg.style.cursor = tool === "addDoor" || tool === "addWindow" ? "crosshair" : "default";
 }
 
-addDoorBtn.addEventListener("click", () => {
-  setTool(currentTool === "addDoor" ? "select" : "addDoor");
-});
+addDoorBtn?.addEventListener("click", () => setTool(currentTool === "addDoor" ? "select" : "addDoor"));
+addWindowBtn?.addEventListener("click", () => setTool(currentTool === "addWindow" ? "select" : "addWindow"));
+addRectBtn?.addEventListener("click", () => createRoom(100, 100, 120, 80));
 
-addWindowBtn.addEventListener("click", () => {
-  setTool(currentTool === "addWindow" ? "select" : "addWindow");
-});
-
-//
-
-addRectBtn.addEventListener("click", () => {
-  createRoom(100, 100, 120, 80);
-});
-
-// ----------------------------------------------------------
-// Rooms: creation, labels, editor
-// ----------------------------------------------------------
-
+// -----------------------------------------
+// Rooms: labels + editor
+// -----------------------------------------
 function ensureRoomLabelForRect(rect) {
   const id = rect.dataset.room;
   let label = svg.querySelector(`text[data-room-label="${id}"]`);
   if (label) return label;
 
-  // Label: two lines using tspans (name + size)
   label = document.createElementNS("http://www.w3.org/2000/svg", "text");
   label.dataset.room = id;
   label.dataset.roomLabel = id;
 
-  // mark so common.js clearing can remove it safely
   label.classList.add("room-label");
   label.setAttribute("data-room-label", id);
 
   label.setAttribute("text-anchor", "middle");
   label.setAttribute("dominant-baseline", "middle");
-  label.setAttribute("font-size", "8");
+  label.setAttribute("font-size", String(UI_LABEL_FONT_SIZE));
   label.setAttribute("fill", "black");
   label.setAttribute("pointer-events", "auto");
   label.style.cursor = "pointer";
@@ -414,7 +381,7 @@ function ensureRoomLabelForRect(rect) {
   label.appendChild(sizeTspan);
 
   label.addEventListener("pointerdown", (e) => e.stopPropagation());
-  attachRoomLabelEvents(label, id); // from common.js
+  attachRoomLabelEvents?.(label, id);
 
   svg.appendChild(label);
   return label;
@@ -427,22 +394,19 @@ function createRoom(x, y, w, h) {
   const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
   rect.setAttribute("x", x);
   rect.setAttribute("y", y);
-  rect.setAttribute("width",  w);
+  rect.setAttribute("width", w);
   rect.setAttribute("height", h);
-  rect.setAttribute("fill", "rgba(0,0,0,0)");
-  rect.setAttribute("stroke", "black");
-  rect.setAttribute("stroke-width", "3");
-  rect.setAttribute("pointer-events", "bounding-box");
   rect.dataset.room = id;
   rect.dataset.roomName = defaultName;
 
   svg.appendChild(rect);
 
+  ensureRoomRectLooksLikeARoom(rect);
   ensureRoomLabelForRect(rect);
   updateRoomLabel(rect);
 
   rebuildWallsView();
-  requestAutoSave("create room");
+  requestAutoSave?.("create room");
 }
 
 function updateRoomLabel(rect) {
@@ -465,7 +429,7 @@ function updateRoomLabel(rect) {
   const sizeTspan = label.querySelector('tspan[data-role="room-size"]');
 
   const roomName = rect.dataset.roomName || `Room ${id}`;
-  const sizeText = formatSizeLabel(w, h);
+  const sizeText = formatSizeLabel?.(w, h) ?? "";
 
   if (nameTspan) {
     nameTspan.textContent = roomName;
@@ -477,15 +441,14 @@ function updateRoomLabel(rect) {
   }
 }
 
-// ---------- Room editor panel ----------
-
+// Room editor panel (uses your existing DOM elements)
 function openSizeEditorForRoom(roomId) {
   const rect = svg.querySelector(`rect[data-room="${roomId}"]:not([data-feature])`);
   if (!rect) return;
 
   const wPx = parseFloat(rect.getAttribute("width"));
   const hPx = parseFloat(rect.getAttribute("height"));
-  widthInput.value  = (wPx * SCALE_M_PER_PX).toFixed(2);
+  widthInput.value = (wPx * SCALE_M_PER_PX).toFixed(2);
   heightInput.value = (hPx * SCALE_M_PER_PX).toFixed(2);
   roomNameInput.value = rect.dataset.roomName || `Room ${roomId}`;
 
@@ -500,11 +463,14 @@ function closeSizeEditor() {
   editingRoomId = null;
 }
 
-applySizeBtn.addEventListener("click", () => {
+applySizeBtn?.addEventListener("click", () => {
   if (!editingRoomId) return;
 
   const rect = svg.querySelector(`rect[data-room="${editingRoomId}"]:not([data-feature])`);
-  if (!rect) { closeSizeEditor(); return; }
+  if (!rect) {
+    closeSizeEditor();
+    return;
+  }
 
   const newName = roomNameInput.value.trim();
   rect.dataset.roomName = newName || `Room ${editingRoomId}`;
@@ -518,36 +484,32 @@ applySizeBtn.addEventListener("click", () => {
   if (!isFinite(newWm) || newWm <= 0) newWm = currentWpx * SCALE_M_PER_PX;
   if (!isFinite(newHm) || newHm <= 0) newHm = currentHpx * SCALE_M_PER_PX;
 
-  const newWpx = newWm / SCALE_M_PER_PX;
-  const newHpx = newHm / SCALE_M_PER_PX;
-
-  rect.setAttribute("width",  newWpx);
-  rect.setAttribute("height", newHpx);
+  rect.setAttribute("width", newWm / SCALE_M_PER_PX);
+  rect.setAttribute("height", newHm / SCALE_M_PER_PX);
 
   updateRoomLabel(rect);
   updateFeaturesForRoom(rect);
   rebuildWallsView();
-  requestAutoSave("apply room edit");
+  requestAutoSave?.("apply room edit");
   closeSizeEditor();
 });
 
-cancelSizeBtn.addEventListener("click", closeSizeEditor);
+cancelSizeBtn?.addEventListener("click", closeSizeEditor);
 
-deleteRoomBtn.addEventListener("click", () => {
+deleteRoomBtn?.addEventListener("click", () => {
   if (!editingRoomId) return;
 
-  const rect  = svg.querySelector(`rect[data-room="${editingRoomId}"]:not([data-feature])`);
+  const rect = svg.querySelector(`rect[data-room="${editingRoomId}"]:not([data-feature])`);
   const label = svg.querySelector(`text[data-room-label="${editingRoomId}"]`);
 
-  // remove features for this room
   const feats = svg.querySelectorAll(`rect[data-feature][data-room="${editingRoomId}"]`);
-  feats.forEach(f => {
+  feats.forEach((f) => {
     removeFeatureLabel(f);
-    if (f.parentNode) f.parentNode.removeChild(f);
+    f.parentNode?.removeChild(f);
   });
 
-  if (label && label.parentNode) label.parentNode.removeChild(label);
-  if (rect && rect.parentNode) rect.parentNode.removeChild(rect);
+  label?.parentNode?.removeChild(label);
+  rect?.parentNode?.removeChild(rect);
 
   if (selectedFeature && selectedFeature.dataset.room === editingRoomId) {
     closeFeatureSelection();
@@ -555,30 +517,30 @@ deleteRoomBtn.addEventListener("click", () => {
 
   closeSizeEditor();
   rebuildWallsView();
-  requestAutoSave("delete room");
+  requestAutoSave?.("delete room");
 });
 
-// ----------------------------------------------------------
+// -----------------------------------------
 // Doors & Windows
-// ----------------------------------------------------------
-
+// -----------------------------------------
 function updateFeaturePosition(feature) {
-  const roomRect = getRoomForFeature(feature);
+  const roomRect = getRoomForFeature?.(feature);
   if (!roomRect) return;
 
   const side = feature.dataset.side;
-  const x    = parseFloat(roomRect.getAttribute("x"));
-  const y    = parseFloat(roomRect.getAttribute("y"));
-  const w    = parseFloat(roomRect.getAttribute("width"));
-  const h    = parseFloat(roomRect.getAttribute("height"));
+  const x = parseFloat(roomRect.getAttribute("x"));
+  const y = parseFloat(roomRect.getAttribute("y"));
+  const w = parseFloat(roomRect.getAttribute("width"));
+  const h = parseFloat(roomRect.getAttribute("height"));
 
   let wallOffsetPx = parseFloat(feature.dataset.wallOffsetPx) || 0;
-  let lengthPx     = parseFloat(feature.dataset.lengthPx)     || 0;
-  const thickness  = getFeatureThickness(feature);
-  const minLen     = 10;
+  let lengthPx = parseFloat(feature.dataset.lengthPx) || 0;
 
-  let wallLen = (side === "top" || side === "bottom") ? w : h;
-  if (lengthPx < minLen)  lengthPx = minLen;
+  const thickness = getFeatureThickness?.(feature) ?? 6;
+  const minLen = 10;
+
+  const wallLen = side === "top" || side === "bottom" ? w : h;
+  if (lengthPx < minLen) lengthPx = minLen;
   if (lengthPx > wallLen) lengthPx = wallLen;
 
   let maxOffset = wallLen - lengthPx;
@@ -587,24 +549,24 @@ function updateFeaturePosition(feature) {
   if (wallOffsetPx > maxOffset) wallOffsetPx = maxOffset;
 
   feature.dataset.wallOffsetPx = String(wallOffsetPx);
-  feature.dataset.lengthPx     = String(lengthPx);
+  feature.dataset.lengthPx = String(lengthPx);
 
   let fx, fy, fw, fh;
   if (side === "top" || side === "bottom") {
     fw = lengthPx;
     fh = thickness;
     fx = x + wallOffsetPx;
-    fy = (side === "top") ? (y - thickness / 2) : (y + h - thickness / 2);
+    fy = side === "top" ? y - thickness / 2 : y + h - thickness / 2;
   } else {
     fw = thickness;
     fh = lengthPx;
     fy = y + wallOffsetPx;
-    fx = (side === "left") ? (x - thickness / 2) : (x + w - thickness / 2);
+    fx = side === "left" ? x - thickness / 2 : x + w - thickness / 2;
   }
 
   feature.setAttribute("x", fx);
   feature.setAttribute("y", fy);
-  feature.setAttribute("width",  fw);
+  feature.setAttribute("width", fw);
   feature.setAttribute("height", fh);
 
   updateFeatureLabel(feature);
@@ -612,8 +574,8 @@ function updateFeaturePosition(feature) {
 
 function updateFeaturesForRoom(roomRect) {
   const roomId = roomRect.dataset.room;
-  const feats  = svg.querySelectorAll(`rect[data-feature][data-room="${roomId}"]`);
-  feats.forEach(f => updateFeaturePosition(f));
+  const feats = svg.querySelectorAll(`rect[data-feature][data-room="${roomId}"]`);
+  feats.forEach((f) => updateFeaturePosition(f));
 
   if (selectedFeature && selectedFeature.dataset.room === roomId) {
     updateFeatureInfoFields(selectedFeature);
@@ -635,50 +597,53 @@ function createFeatureOnRoom(roomRect, kind, clickPos) {
   const w = parseFloat(roomRect.getAttribute("width"));
   const h = parseFloat(roomRect.getAttribute("height"));
 
-  const defaultLenM  = kind === "door" ? 0.9 : 1.2;
+  const defaultLenM = kind === "door" ? 0.9 : 1.2;
   const defaultLenPx = defaultLenM / SCALE_M_PER_PX;
 
-  const dTop    = Math.abs(clickPos.y - y);
+  const dTop = Math.abs(clickPos.y - y);
   const dBottom = Math.abs(clickPos.y - (y + h));
-  const dLeft   = Math.abs(clickPos.x - x);
-  const dRight  = Math.abs(clickPos.x - (x + w));
+  const dLeft = Math.abs(clickPos.x - x);
+  const dRight = Math.abs(clickPos.x - (x + w));
 
   let side = "top";
   let minD = dTop;
-  if (dBottom < minD) { minD = dBottom; side = "bottom"; }
-  if (dLeft   < minD) { minD = dLeft;   side = "left";   }
-  if (dRight  < minD) {               side = "right";    }
-
-  let wallLen, wallCoordClick;
-  if (side === "top" || side === "bottom") {
-    wallLen        = w;
-    wallCoordClick = clickPos.x - x;
-  } else {
-    wallLen        = h;
-    wallCoordClick = clickPos.y - y;
+  if (dBottom < minD) {
+    minD = dBottom;
+    side = "bottom";
+  }
+  if (dLeft < minD) {
+    minD = dLeft;
+    side = "left";
+  }
+  if (dRight < minD) {
+    side = "right";
   }
 
+  const wallLen = side === "top" || side === "bottom" ? w : h;
+  const wallCoordClick = side === "top" || side === "bottom" ? clickPos.x - x : clickPos.y - y;
+
   let lengthPx = Math.min(defaultLenPx, wallLen);
-  let startPx  = wallCoordClick - lengthPx / 2;
+  let startPx = wallCoordClick - lengthPx / 2;
+
   if (startPx < 0) startPx = 0;
   if (startPx + lengthPx > wallLen) startPx = wallLen - lengthPx;
   if (startPx < 0) startPx = 0;
 
   const feature = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  feature.dataset.feature   = kind;
+  feature.dataset.feature = kind;
   feature.dataset.featureId = String(nextFeatureId++);
-  feature.dataset.room      = roomRect.dataset.room;
-  feature.dataset.side      = side;
+  feature.dataset.room = roomRect.dataset.room;
+  feature.dataset.side = side;
   feature.dataset.wallOffsetPx = String(startPx);
-  feature.dataset.lengthPx     = String(lengthPx);
+  feature.dataset.lengthPx = String(lengthPx);
 
   if (kind === "window") {
     feature.dataset.windowHeadM = String(WINDOW_HEAD_DEFAULT_M);
   }
 
-  feature.setAttribute("pointer-events", "visiblePainted");
   feature.style.cursor = "pointer";
   feature.setAttribute("fill", kind === "door" ? "#c08040" : "#80c0ff");
+  ensureFeatureRectLooksLikeAFeature(feature);
 
   updateFeaturePosition(feature);
   bindFeatureEvents(feature);
@@ -686,11 +651,10 @@ function createFeatureOnRoom(roomRect, kind, clickPos) {
   svg.appendChild(feature);
 
   rebuildWallsView();
-  requestAutoSave("create feature");
+  requestAutoSave?.("create feature");
 }
 
-// ---------- Feature editor panel ----------
-
+// Feature editor panel (your existing UI)
 function openFeatureInfo(feature) {
   selectedFeature = feature;
   updateFeatureInfoFields(feature);
@@ -699,15 +663,15 @@ function openFeatureInfo(feature) {
 }
 
 function updateFeatureInfoFields(feature) {
-  const kind     = feature.dataset.feature === "door" ? "Door" : "Window";
-  const roomRect = getRoomForFeature(feature);
+  const kind = feature.dataset.feature === "door" ? "Door" : "Window";
+  const roomRect = getRoomForFeature?.(feature);
   if (!roomRect) return;
 
   const wallOffsetPx = parseFloat(feature.dataset.wallOffsetPx) || 0;
-  const lengthPx     = parseFloat(feature.dataset.lengthPx)     || 0;
+  const lengthPx = parseFloat(feature.dataset.lengthPx) || 0;
 
   featureTypeLabel.textContent = kind;
-  featureWidthInput.value  = (lengthPx     * SCALE_M_PER_PX).toFixed(2);
+  featureWidthInput.value = (lengthPx * SCALE_M_PER_PX).toFixed(2);
   featureOffsetInput.value = (wallOffsetPx * SCALE_M_PER_PX).toFixed(2);
 
   if (feature.dataset.feature === "window") {
@@ -729,21 +693,21 @@ function closeFeatureSelection() {
 function applyFeatureInputs() {
   if (!selectedFeature) return;
 
-  const roomRect = getRoomForFeature(selectedFeature);
+  const roomRect = getRoomForFeature?.(selectedFeature);
   if (!roomRect) return;
 
   const side = selectedFeature.dataset.side;
-  const w    = parseFloat(roomRect.getAttribute("width"));
-  const h    = parseFloat(roomRect.getAttribute("height"));
-  const wallLen = (side === "top" || side === "bottom") ? w : h;
+  const w = parseFloat(roomRect.getAttribute("width"));
+  const h = parseFloat(roomRect.getAttribute("height"));
+  const wallLen = side === "top" || side === "bottom" ? w : h;
 
-  let widthM  = parseFloat(featureWidthInput.value);
+  let widthM = parseFloat(featureWidthInput.value);
   let offsetM = parseFloat(featureOffsetInput.value);
 
   if (!isFinite(widthM) || widthM <= 0) return;
   if (!isFinite(offsetM) || offsetM < 0) offsetM = 0;
 
-  let lengthPx = widthM  / SCALE_M_PER_PX;
+  let lengthPx = widthM / SCALE_M_PER_PX;
   let offsetPx = offsetM / SCALE_M_PER_PX;
 
   const minLen = 10;
@@ -756,7 +720,7 @@ function applyFeatureInputs() {
   if (offsetPx < 0) offsetPx = 0;
 
   selectedFeature.dataset.wallOffsetPx = String(offsetPx);
-  selectedFeature.dataset.lengthPx     = String(lengthPx);
+  selectedFeature.dataset.lengthPx = String(lengthPx);
 
   if (selectedFeature.dataset.feature === "window") {
     let headM = parseFloat(featureHeadInput.value);
@@ -769,33 +733,32 @@ function applyFeatureInputs() {
   updateFeatureHandlesPosition();
   updateFeatureInfoFields(selectedFeature);
   rebuildWallsView();
-  requestAutoSave("edit feature");
+  requestAutoSave?.("edit feature");
 }
 
-featureWidthInput.addEventListener("change", applyFeatureInputs);
-featureOffsetInput.addEventListener("change", applyFeatureInputs);
-featureHeadInput.addEventListener("change", applyFeatureInputs);
+featureWidthInput?.addEventListener("change", applyFeatureInputs);
+featureOffsetInput?.addEventListener("change", applyFeatureInputs);
+featureHeadInput?.addEventListener("change", applyFeatureInputs);
 
-deleteFeatureBtn.addEventListener("click", () => {
+deleteFeatureBtn?.addEventListener("click", () => {
   if (!selectedFeature) return;
   removeFeatureHandles();
   removeFeatureLabel(selectedFeature);
-
-  if (selectedFeature.parentNode) selectedFeature.parentNode.removeChild(selectedFeature);
-
+  selectedFeature.parentNode?.removeChild(selectedFeature);
   selectedFeature = null;
   featureInfo.style.display = "none";
   rebuildWallsView();
-  requestAutoSave("delete feature");
+  requestAutoSave?.("delete feature");
 });
 
-// ----------------------------------------------------------
-// Feature handles (circles to drag doors/windows)
-// ----------------------------------------------------------
-
+// -----------------------------------------
+// Feature handles (circles)
+// -----------------------------------------
 function removeFeatureHandles() {
-  if (featureHandleStart) { if (featureHandleStart.parentNode) featureHandleStart.parentNode.removeChild(featureHandleStart); featureHandleStart = null; }
-  if (featureHandleEnd)   { if (featureHandleEnd.parentNode) featureHandleEnd.parentNode.removeChild(featureHandleEnd);     featureHandleEnd   = null; }
+  featureHandleStart?.parentNode?.removeChild(featureHandleStart);
+  featureHandleEnd?.parentNode?.removeChild(featureHandleEnd);
+  featureHandleStart = null;
+  featureHandleEnd = null;
 }
 
 function attachHandleDrag(handle, feature, handleType) {
@@ -803,24 +766,24 @@ function attachHandleDrag(handle, feature, handleType) {
     e.preventDefault();
     e.stopPropagation();
 
-    const roomRect = getRoomForFeature(feature);
+    const roomRect = getRoomForFeature?.(feature);
     if (!roomRect) return;
 
-    const side   = feature.dataset.side;
-    const w      = parseFloat(roomRect.getAttribute("width"));
-    const h      = parseFloat(roomRect.getAttribute("height"));
-    const wallLen= (side === "top" || side === "bottom") ? w : h;
+    const side = feature.dataset.side;
+    const w = parseFloat(roomRect.getAttribute("width"));
+    const h = parseFloat(roomRect.getAttribute("height"));
+    const wallLen = side === "top" || side === "bottom" ? w : h;
 
     const startOffset = parseFloat(feature.dataset.wallOffsetPx) || 0;
-    const startLength = parseFloat(feature.dataset.lengthPx)     || 0;
-    const startPoint  = getPointerPosition(e);
-    const minLen      = 10;
+    const startLength = parseFloat(feature.dataset.lengthPx) || 0;
+    const startPoint = getPointerPosition(e);
+    const minLen = 10;
 
     function onMove(ev) {
       ev.preventDefault();
       const pos = getPointerPosition(ev);
-      const dx  = pos.x - startPoint.x;
-      const dy  = pos.y - startPoint.y;
+      const dx = pos.x - startPoint.x;
+      const dy = pos.y - startPoint.y;
 
       let offset = startOffset;
       let length = startLength;
@@ -848,7 +811,7 @@ function attachHandleDrag(handle, feature, handleType) {
       }
 
       feature.dataset.wallOffsetPx = String(offset);
-      feature.dataset.lengthPx     = String(length);
+      feature.dataset.lengthPx = String(length);
 
       updateFeaturePosition(feature);
       updateFeatureHandlesPosition();
@@ -856,13 +819,13 @@ function attachHandleDrag(handle, feature, handleType) {
 
       if (selectedFeature === feature) updateFeatureInfoFields(feature);
       rebuildWallsView();
-      requestAutoSave("drag feature handle");
+      requestAutoSave?.("drag feature handle");
     }
 
     function onUp(ev) {
       ev.preventDefault();
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup",   onUp);
+      window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     }
 
@@ -886,13 +849,13 @@ function createFeatureHandles(feature) {
   if (side === "top" || side === "bottom") {
     startCx = x;
     startCy = y + h / 2;
-    endCx   = x + w;
-    endCy   = y + h / 2;
+    endCx = x + w;
+    endCy = y + h / 2;
   } else {
     startCx = x + w / 2;
     startCy = y;
-    endCx   = x + w / 2;
-    endCy   = y + h;
+    endCx = x + w / 2;
+    endCy = y + h;
   }
 
   featureHandleStart = document.createElementNS("http://www.w3.org/2000/svg", "circle");
@@ -915,7 +878,7 @@ function createFeatureHandles(feature) {
   svg.appendChild(featureHandleEnd);
 
   attachHandleDrag(featureHandleStart, feature, "start");
-  attachHandleDrag(featureHandleEnd,   feature, "end");
+  attachHandleDrag(featureHandleEnd, feature, "end");
 }
 
 function updateFeatureHandlesPosition() {
@@ -931,24 +894,24 @@ function updateFeatureHandlesPosition() {
   if (side === "top" || side === "bottom") {
     startCx = x;
     startCy = y + h / 2;
-    endCx   = x + w;
-    endCy   = y + h / 2;
+    endCx = x + w;
+    endCy = y + h / 2;
   } else {
     startCx = x + w / 2;
     startCy = y;
-    endCx   = x + w / 2;
-    endCy   = y + h;
+    endCx = x + w / 2;
+    endCy = y + h;
   }
 
   featureHandleStart.setAttribute("cx", startCx);
   featureHandleStart.setAttribute("cy", startCy);
-  featureHandleEnd.setAttribute("cx",   endCx);
-  featureHandleEnd.setAttribute("cy",   endCy);
+  featureHandleEnd.setAttribute("cx", endCx);
+  featureHandleEnd.setAttribute("cy", endCy);
 }
 
-// ----------------------------------------------------------
-// Snapping & pointer handling for rooms
-// ----------------------------------------------------------
+// -----------------------------------------
+// Snapping
+// -----------------------------------------
 function applySnapping(rect, proposedX, proposedY) {
   const w = parseFloat(rect.getAttribute("width"));
   const h = parseFloat(rect.getAttribute("height"));
@@ -956,19 +919,13 @@ function applySnapping(rect, proposedX, proposedY) {
   let snappedX = proposedX;
   let snappedY = proposedY;
 
-  const allRects = Array.from(
-    svg.querySelectorAll('rect[data-room]:not([data-feature])')
-  );
+  const allRects = Array.from(svg.querySelectorAll('rect[data-room]:not([data-feature])'));
+  const overlapMin = 20;
 
-  const overlapMin = 20; // px overlap required to consider a shared wall
+  const snap = (value, target, dist) => (Math.abs(value - target) <= dist ? target : value);
+  const overlap = (a1, a2, b1, b2) => Math.min(a2, b2) - Math.max(a1, b1);
 
-  const snap = (value, target, dist) =>
-    Math.abs(value - target) <= dist ? target : value;
-
-  const overlap = (a1, a2, b1, b2) =>
-    Math.min(a2, b2) - Math.max(a1, b1);
-
-  allRects.forEach(other => {
+  allRects.forEach((other) => {
     if (other === rect) return;
 
     const ox = parseFloat(other.getAttribute("x"));
@@ -976,35 +933,29 @@ function applySnapping(rect, proposedX, proposedY) {
     const ow = parseFloat(other.getAttribute("width"));
     const oh = parseFloat(other.getAttribute("height"));
 
-    const oL = ox;
-    const oR = ox + ow;
-    const oT = oy;
-    const oB = oy + oh;
+    const oL = ox,
+      oR = ox + ow,
+      oT = oy,
+      oB = oy + oh;
 
-    const sL = snappedX;
-    const sR = snappedX + w;
-    const sT = snappedY;
-    const sB = snappedY + h;
+    const sL = snappedX,
+      sR = snappedX + w,
+      sT = snappedY,
+      sB = snappedY + h;
 
     const vOverlap = overlap(sT, sB, oT, oB);
     const hOverlap = overlap(sL, sR, oL, oR);
 
-    // --------------------------------------------------
-    // 1) TOUCHING WALLS (strong snap, requires overlap)
-    // --------------------------------------------------
     if (vOverlap >= overlapMin) {
-      snappedX = snap(snappedX, oR, SNAP_TOUCH_PX);      // left to right
-      snappedX = snap(snappedX, oL - w, SNAP_TOUCH_PX);  // right to left
+      snappedX = snap(snappedX, oR, SNAP_TOUCH_PX);
+      snappedX = snap(snappedX, oL - w, SNAP_TOUCH_PX);
     }
 
     if (hOverlap >= overlapMin) {
-      snappedY = snap(snappedY, oB, SNAP_TOUCH_PX);      // top to bottom
-      snappedY = snap(snappedY, oT - h, SNAP_TOUCH_PX);  // bottom to top
+      snappedY = snap(snappedY, oB, SNAP_TOUCH_PX);
+      snappedY = snap(snappedY, oT - h, SNAP_TOUCH_PX);
     }
 
-    // --------------------------------------------------
-    // 2) ALIGNMENT (weak snap, no forced touching)
-    // --------------------------------------------------
     snappedX = snap(snappedX, oL, SNAP_ALIGN_PX);
     snappedX = snap(snappedX, oR - w, SNAP_ALIGN_PX);
 
@@ -1012,59 +963,44 @@ function applySnapping(rect, proposedX, proposedY) {
     snappedY = snap(snappedY, oB - h, SNAP_ALIGN_PX);
   });
 
-  // tiny quantize to kill floating-point dust
   snappedX = Math.round(snappedX * 10) / 10;
   snappedY = Math.round(snappedY * 10) / 10;
 
   return { x: snappedX, y: snappedY };
 }
 
-
-
-// Pointer events on SVG (rooms + features)
-
+// -----------------------------------------
+// Pointer events (rooms + features)
+// -----------------------------------------
 svg.addEventListener("pointerdown", (evt) => {
-  
-//if (evt.pointerType === "touch" && evt.isPrimary === false) return; // ignore 2nd finger
-
- // if (evt.isPrimary === false) return; // ignore non-primary pointers (2nd finger)
-
-
   const target = evt.target;
-  
 
-  // clicking room label handled separately
-  if (target.tagName === "text" && target.dataset.room) return;
+  // room label clicks handled elsewhere
+  if (target?.tagName === "text" && target.dataset.room) return;
 
-  const isRect        = target && target.tagName === "rect";
-  const isHandle      = target && target.tagName === "circle";
+  const isRect = target?.tagName === "rect";
+  const isHandle = target?.tagName === "circle";
   const isFeatureRect = isRect && !!target.dataset.feature;
-  const isRoomRect    = isRect && !!target.dataset.room && !isFeatureRect;
+  const isRoomRect = isRect && !!target.dataset.room && !isFeatureRect;
 
   if (!isRoomRect) setSelectedRoomRect(null);
 
-
-  // 1) If we're in addDoor/addWindow mode and click NOT on a room -> exit
   if ((currentTool === "addDoor" || currentTool === "addWindow") && !isRoomRect) {
     setTool("select");
   }
 
-  // 2) Click away from feature -> deselect it (unless clicking feature/handle)
   if (selectedFeature && !isFeatureRect && !isHandle) {
     closeFeatureSelection();
   }
 
-  // If not a rect, nothing else to do
   if (!isRect) return;
 
-  // 3) Click on feature body -> select/open feature info
   if (isFeatureRect) {
     openFeatureInfo(target);
     evt.preventDefault();
     return;
   }
 
-  // 4) Add-door / add-window mode (stay in mode after placing)
   if (isRoomRect && (currentTool === "addDoor" || currentTool === "addWindow")) {
     const pos = getPointerPosition(evt);
     createFeatureOnRoom(target, currentTool === "addDoor" ? "door" : "window", pos);
@@ -1072,7 +1008,6 @@ svg.addEventListener("pointerdown", (evt) => {
     return;
   }
 
-  // 5) Select mode -> drag/resize room
   if (currentTool !== "select" || !isRoomRect) return;
 
   const pos = getPointerPosition(evt);
@@ -1086,25 +1021,24 @@ svg.addEventListener("pointerdown", (evt) => {
   const h = parseFloat(target.getAttribute("height"));
   startRect = { x, y, w, h };
 
-  const margin     = 5;
-  const nearRight  = pos.x > x + w - margin && pos.x < x + w + margin;
+  const margin = 5;
+  const nearRight = pos.x > x + w - margin && pos.x < x + w + margin;
   const nearBottom = pos.y > y + h - margin && pos.y < y + h + margin;
 
   if (joinedMode || lockSizes) {
-  dragMode = "move";
-} else {
-  dragMode = (nearRight || nearBottom) ? "resize" : "move";
-}
+    dragMode = "move";
+  } else {
+    dragMode = nearRight || nearBottom ? "resize" : "move";
+  }
 
-  svg.style.cursor = (dragMode === "resize") ? "nwse-resize" : "move";
+  svg.style.cursor = dragMode === "resize" ? "nwse-resize" : "move";
 
   if (joinedMode && dragMode === "move") {
-    startPositions = Array.from(svg.querySelectorAll('rect[data-room]:not([data-feature])'))
-      .map(r => ({
-        element: r,
-        x: parseFloat(r.getAttribute("x")),
-        y: parseFloat(r.getAttribute("y"))
-      }));
+    startPositions = Array.from(svg.querySelectorAll('rect[data-room]:not([data-feature])')).map((r) => ({
+      element: r,
+      x: parseFloat(r.getAttribute("x")),
+      y: parseFloat(r.getAttribute("y")),
+    }));
   } else {
     startPositions = [];
   }
@@ -1112,17 +1046,12 @@ svg.addEventListener("pointerdown", (evt) => {
   evt.preventDefault();
 });
 
-//==========================================================================
-//=============new ========================================================
-const HOVER_MARGIN = 5;
-
 svg.addEventListener("pointermove", (evt) => {
   if (currentTool !== "select") return;
   if (draggingRoom) return;
 
   const target = evt.target;
   const isRoomRect = target?.matches?.('rect[data-room]:not([data-feature])');
-
   if (!isRoomRect) {
     svg.style.cursor = "";
     return;
@@ -1135,70 +1064,66 @@ svg.addEventListener("pointermove", (evt) => {
   const w = parseFloat(target.getAttribute("width"));
   const h = parseFloat(target.getAttribute("height"));
 
-  const nearRight  = Math.abs(pos.x - (x + w)) < HOVER_MARGIN;
+  const nearRight = Math.abs(pos.x - (x + w)) < HOVER_MARGIN;
   const nearBottom = Math.abs(pos.y - (y + h)) < HOVER_MARGIN;
 
-  const hoverMode =
-    (joinedMode || lockSizes)
-      ? "move"
-      : (nearRight || nearBottom) ? "resize" : "move";
-
-  svg.style.cursor = (hoverMode === "resize") ? "nwse-resize" : "move";
+  const hoverMode = joinedMode || lockSizes ? "move" : nearRight || nearBottom ? "resize" : "move";
+  svg.style.cursor = hoverMode === "resize" ? "nwse-resize" : "move";
 
   target.classList.toggle("room-hover-resize", hoverMode === "resize");
   target.classList.toggle("room-hover-move", hoverMode === "move");
 });
 
-//=========================================================================
-
-
-
-
-
-
 svg.addEventListener("pointermove", (evt) => {
   if (!draggingRoom || !dragMode) return;
 
   const pos = getPointerPosition(evt);
-  const dx  = pos.x - startPointer.x;
-  const dy  = pos.y - startPointer.y;
+  const dx = pos.x - startPointer.x;
+  const dy = pos.y - startPointer.y;
 
   if (dragMode === "move") {
     svg.style.cursor = "move";
 
     if (joinedMode) {
-      startPositions.forEach(item => {
+      startPositions.forEach((item) => {
         item.element.setAttribute("x", item.x + dx);
         item.element.setAttribute("y", item.y + dy);
         updateRoomLabel(item.element);
         updateFeaturesForRoom(item.element);
       });
       rebuildWallsView();
-      requestAutoSave("move rooms joined");
+      requestAutoSave?.("move rooms joined");
     } else {
       const proposedX = startRect.x + dx;
       const proposedY = startRect.y + dy;
-      const snapped   = applySnapping(draggingRoom, proposedX, proposedY);
+      const snapped = applySnapping(draggingRoom, proposedX, proposedY);
+
       draggingRoom.setAttribute("x", snapped.x);
       draggingRoom.setAttribute("y", snapped.y);
+
       updateRoomLabel(draggingRoom);
       updateFeaturesForRoom(draggingRoom);
+
       rebuildWallsView();
-      requestAutoSave("move room");
+      requestAutoSave?.("move room");
     }
   } else if (dragMode === "resize") {
     svg.style.cursor = "nwse-resize";
     let newW = startRect.w + dx;
     let newH = startRect.h + dy;
+
     const minSize = 15;
     if (newW < minSize) newW = minSize;
     if (newH < minSize) newH = minSize;
-    draggingRoom.setAttribute("width",  newW);
+
+    draggingRoom.setAttribute("width", newW);
     draggingRoom.setAttribute("height", newH);
+
     updateRoomLabel(draggingRoom);
     updateFeaturesForRoom(draggingRoom);
+
     rebuildWallsView();
-    requestAutoSave("resize room");
+    requestAutoSave?.("resize room");
   }
 
   evt.preventDefault();
@@ -1206,48 +1131,115 @@ svg.addEventListener("pointermove", (evt) => {
 
 function endRoomDrag() {
   draggingRoom = null;
-  dragMode     = null;
+  dragMode = null;
   startPointer = null;
-  startRect    = null;
+  startRect = null;
   startPositions = [];
 
-  svg.style.cursor =
-    (currentTool === "addDoor" || currentTool === "addWindow") ? "crosshair" : "default";
+  svg.style.cursor = currentTool === "addDoor" || currentTool === "addWindow" ? "crosshair" : "default";
 }
 
-svg.addEventListener("pointerup",     endRoomDrag);
+svg.addEventListener("pointerup", endRoomDrag);
 svg.addEventListener("pointercancel", endRoomDrag);
 
-// ----------------------------------------------------------
-// Re-bind labels + click handlers after restore
-// (common.js recreates rects, but labels/events are plan.js job)
-// ----------------------------------------------------------
-
+// -----------------------------------------
+// Rebind after restore
+// -----------------------------------------
 function rebuildPlanLabelsAndBindings() {
-  // Rooms
   const rooms = svg.querySelectorAll('rect[data-room]:not([data-feature])');
+  rooms.forEach((r) => {
+    ensureRoomRectLooksLikeARoom(r);
+    ensureRoomLabelForRect(r);
+    updateRoomLabel(r);
+  });
 
-rooms.forEach(r => {
-  ensureRoomRectLooksLikeARoom(r);
-  ensureRoomLabelForRect(r);
-  updateRoomLabel(r);
-});
-
-  // Features
-  const feats = Array.from(svg.querySelectorAll('rect[data-feature]'));
-  feats.forEach(f => {
-    // ensure featureId exists
+  const feats = Array.from(svg.querySelectorAll("rect[data-feature]"));
+  feats.forEach((f) => {
     if (!f.dataset.featureId) f.dataset.featureId = String(nextFeatureId++);
+    ensureFeatureRectLooksLikeAFeature(f);
     bindFeatureEvents(f);
     updateFeaturePosition(f);
   });
 }
 
-// ----------------------------------------------------------
-// Startup (ONE place only)
-// ----------------------------------------------------------
+// ==========================================================
+// EXPORT: FORCE HAIRLINE 0.026mm
+// ==========================================================
+function buildExportSvgString(svgEl) {
+  if (!svgEl) throw new Error("SVG element missing");
+
+  const clone = svgEl.cloneNode(true);
+
+  // remove editor-only handles
+  clone.querySelectorAll("circle").forEach((n) => n.remove());
+
+  // remove hover/selection classes
+  clone.querySelectorAll(".room-selected, .room-hover-resize, .room-hover-move").forEach((n) => {
+    n.classList.remove("room-selected", "room-hover-resize", "room-hover-move");
+  });
+
+  // remove label outline strokes (laser export friendly)
+  clone.querySelectorAll("text").forEach((t) => {
+    t.removeAttribute("stroke");
+    t.removeAttribute("stroke-width");
+    t.removeAttribute("paint-order");
+  });
+
+  // FORCE hairline on anything with a stroke OR rooms/features explicitly
+  const geo = clone.querySelectorAll("rect, path, line, polyline, polygon, circle, ellipse");
+  geo.forEach((el) => {
+    const strokeAttr = el.getAttribute("stroke");
+    const style = el.getAttribute("style") || "";
+    const hasStroke = (strokeAttr && strokeAttr !== "none") || style.includes("stroke:");
+
+    // Force rooms/features to have a stroke in export
+    const isRoom = el.tagName === "rect" && el.hasAttribute("data-room") && !el.hasAttribute("data-feature");
+    const isFeature = el.tagName === "rect" && el.hasAttribute("data-feature");
+
+    if (hasStroke || isRoom || isFeature) {
+      if (!strokeAttr || strokeAttr === "none") el.setAttribute("stroke", "black");
+      el.setAttribute("stroke-width", String(EXPORT_STROKE_U));
+      el.setAttribute("vector-effect", "non-scaling-stroke");
+      el.setAttribute("stroke-linecap", "square");
+      el.setAttribute("stroke-linejoin", "miter");
+    }
+
+    // Ensure rooms are not filled in export unless you want engrave
+    if (isRoom) el.setAttribute("fill", "none");
+  });
+
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+
+  const serializer = new XMLSerializer();
+  return serializer.serializeToString(clone);
+}
+
+function downloadSvgString(svgString, filename = "floorplan.svg") {
+  const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportFloorplanSvg() {
+  const svgString = buildExportSvgString(svg);
+  downloadSvgString(svgString, "floorplan_hairline_0.026mm.svg");
+}
+
+// If you have an export button:
+document.getElementById("exportBtn")?.addEventListener("click", exportFloorplanSvg);
+
+// -----------------------------------------
+// Startup
+// -----------------------------------------
 document.addEventListener("DOMContentLoaded", () => {
-  // --- Lock Sizes ---
+  // lock sizes UI
   const lockChk = document.getElementById("lockSizesChk");
   const lockStatus = document.getElementById("lockSizesStatus");
 
@@ -1262,91 +1254,68 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // --- Join Mode (Add Floors) ---
-  const joinChk = document.getElementById("toggleJoinBtn"); // your checkbox id
-  const joinStatus = document.getElementById("joinStatus"); // your <span id="joinStatus">
+  // join mode UI
+  const joinChk = document.getElementById("toggleJoinBtn");
+  const joinStatus = document.getElementById("joinStatus");
 
   if (joinChk) {
-    // sync UI from real state
     joinChk.checked = !!joinedMode;
     if (joinStatus) joinStatus.textContent = joinedMode ? "ON" : "OFF";
 
     joinChk.addEventListener("change", () => {
       joinedMode = joinChk.checked;
       if (joinStatus) joinStatus.textContent = joinedMode ? "ON" : "OFF";
-
-      rebuildWallsView?.();              // floors show/hide
-      requestAutoSave?.("join mode");    // persist
+      rebuildWallsView?.();
+      requestAutoSave?.("join mode");
     });
   }
 
-
-
-
-  // 1) clear all button;
+  // clear all
   const resetBtn = document.getElementById("resetAppBtn");
-if (resetBtn) {
-  resetBtn.addEventListener("click", () => {
-    const ok = confirm(
-      "This will permanently delete the saved plan on this device.\n\nContinue?"
-    );
-    if (!ok) return;
-
-    resetRoomPlannerStorage();   // from common.js
-    location.reload();           // hard reset UI state
-  });
-}
-
-
-  // 2) Load saved rooms/features/etc (ONLY ONE system)
-  loadFloorplanFromLocalStorage?.();   // OR loadFloorplanState() (but not both)
-
-  svg.querySelectorAll('rect[data-room]:not([data-feature])')
-  .forEach(ensureRoomRectLooksLikeARoom);
-
-  // 3) Recreate any missing labels (rooms + features)
-  
-  rebuildPlanLabelsAndBindings?.();
-
-  // 4) Install zoom AFTER svg exists
-  installPlanViewZoom?.(svg);
-
- // installTouchPinchAndHover(svg, { resizeMargin: 5 });
-
-  // 5) Sync Join UI from actual state
-   //If toggleJoinBtn is now a checkbox switch:
-   toggleJoinBtn.checked = !!joinedMode;
-   document.getElementById("joinStatus").textContent = joinedMode ? "ON" : "OFF";
-  // If you're still using the old button text:
-  if (toggleJoinBtn && toggleJoinBtn.tagName !== "INPUT") {
-    toggleJoinBtn.textContent = "Join: " + (joinedMode ? "ON" : "OFF");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      const ok = confirm("This will permanently delete the saved plan on this device.\n\nContinue?");
+      if (!ok) return;
+      resetRoomPlannerStorage?.();
+      location.reload();
+    });
   }
 
-  // 6) Hook student name input
+  // load saved state
+  loadFloorplanFromLocalStorage?.();
+
+  // ensure styles for all rooms/features
+  svg.querySelectorAll('rect[data-room]:not([data-feature])').forEach(ensureRoomRectLooksLikeARoom);
+  svg.querySelectorAll("rect[data-feature]").forEach(ensureFeatureRectLooksLikeAFeature);
+
+  // rebuild labels & events
+  rebuildPlanLabelsAndBindings?.();
+
+  // install zoom after svg exists
+  installPlanViewZoom?.(svg);
+
+  // student name input
   const nameInput = document.getElementById("studentNameInput");
   if (nameInput) {
     nameInput.value = currentStudentName || "";
-    nameInput.addEventListener("input", () => setStudentName(nameInput.value));
+    nameInput.addEventListener("input", () => setStudentName?.(nameInput.value));
   }
 
-  // 7) Autosave watcher LAST (so loading doesn't trigger saves)
+  // autosave watcher last
   installFeatureAutoSaveObserver?.();
 
-  // 8) Build laser view AFTER state + labels exist
+  // build laser view
   rebuildWallsView?.();
 
-  // rebuild fingerjoints
+  // material thickness listeners if present
   if (materialThicknessInput) {
-  materialThicknessInput.addEventListener("input", () => {
-    rebuildWallsView();
-    requestAutoSave?.("material thickness");
-  });
-
-  // optional: also rebuild on blur/change for number inputs
-  materialThicknessInput.addEventListener("change", () => {
-    rebuildWallsView();
-    requestAutoSave?.("material thickness");
-  });
-}
-
+    materialThicknessInput.addEventListener("input", () => {
+      rebuildWallsView();
+      requestAutoSave?.("material thickness");
+    });
+    materialThicknessInput.addEventListener("change", () => {
+      rebuildWallsView();
+      requestAutoSave?.("material thickness");
+    });
+  }
 });
