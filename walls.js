@@ -436,7 +436,7 @@ function rebuildWallsView() {
         holeRect.setAttribute("height", holeHeight);
         holeRect.setAttribute("fill", "none");
         holeRect.setAttribute("stroke", "rgb(255,0,0)");
-        holeRect.setAttribute("stroke-width", "0.026");
+        holeRect.setAttribute("stroke-width", "1");
         setExportFlag(holeRect, true);
         wallsSvg.appendChild(holeRect);
       });
@@ -682,5 +682,6 @@ function initWallsView() {
 
 document.addEventListener("DOMContentLoaded", initWallsView);
 window.rebuildWallsView = rebuildWallsView; // handy for debugging
+
 
 
