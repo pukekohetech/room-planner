@@ -19,6 +19,9 @@ let lockSizes = false;
 const toggleJoinBtn     = document.getElementById("toggleJoinBtn");
 
 const addRectBtn        = document.getElementById("addRectBtn");
+const addPolygonRoomBtn = document.getElementById("addPolygonRoomBtn");
+const polygonSidesInput = document.getElementById("polygonSidesInput");
+const addWallPointBtn = document.getElementById("addWallPointBtn");
 const addDoorBtn        = document.getElementById("addDoorBtn");
 const addWindowBtn      = document.getElementById("addWindowBtn");
 const downloadSheetsBtn = document.getElementById("downloadSheetsBtn");
@@ -31,6 +34,18 @@ const sizeEditor    = document.getElementById("sizeEditor");
 const roomNameInput = document.getElementById("roomNameInput");
 const widthInput    = document.getElementById("widthInput");
 const heightInput   = document.getElementById("heightInput");
+const polygonEditor = document.getElementById("polygonEditor");
+const roomPolygonSidesInput = document.getElementById("roomPolygonSidesInput");
+const insertWallPointBtn = document.getElementById("insertWallPointBtn");
+const deletePolygonPointBtn = document.getElementById("deletePolygonPointBtn");
+const cornerCutEditor = document.getElementById("cornerCutEditor");
+const cornerCutTlInput = document.getElementById("cornerCutTlInput");
+const cornerCutTrInput = document.getElementById("cornerCutTrInput");
+const cornerCutBrInput = document.getElementById("cornerCutBrInput");
+const cornerCutBlInput = document.getElementById("cornerCutBlInput");
+const roomRotationInput = document.getElementById("roomRotationInput");
+const showDeletedWallsChk = document.getElementById("showDeletedWallsChk");
+const restoreDeletedWallsBtn = document.getElementById("restoreDeletedWallsBtn");
 const applySizeBtn  = document.getElementById("applySizeBtn");
 const cancelSizeBtn = document.getElementById("cancelSizeBtn");
 const deleteRoomBtn = document.getElementById("deleteRoomBtn");
@@ -63,6 +78,9 @@ const WINDOW_HEIGHT_DEFAULT_M = 1.0;
 
 const ENABLE_FINGER_JOINTS = true;
 
+// A room can now be a regular rectangle or a polygon (angled / triangular room).
+const ROOM_ELEMENT_SELECTOR = 'rect[data-room]:not([data-feature]), polygon[data-room]:not([data-feature])';
+
 // ==========================================================
 // STATE
 // ==========================================================
@@ -79,7 +97,7 @@ let startPositions = [];
 let nextRoomId    = 1;
 let nextFeatureId = 1;
 
-let currentTool   = "select"; // "select" | "addDoor" | "addWindow"
+let currentTool   = "select"; // "select" | "addDoor" | "addWindow" | "addWallPoint"
 let editingRoomId = null;
 
 let selectedFeature    = null;
@@ -90,6 +108,7 @@ let pt = null;
 
 let wallVisibility  = new Map(); // wallKey => bool
 let floorVisibility = new Map(); // roomId  => bool
+let showDeletedWalls = false; // show faded/deleted wall placeholders in the laser view
 
 let currentStudentName = ""; // set from UI input
 
@@ -124,10 +143,10 @@ function extractTrailingInt(value) {
 function serializeFloorplan() {
   if (!ensureSvgBound()) {
     return {
-      version: 1,
+      version: 3,
       meta: { savedAt: new Date().toISOString(), studentName: currentStudentName || "" },
       counters: { nextRoomId, nextFeatureId },
-      ui: { joinedMode, currentTool, lockSizes },
+      ui: { joinedMode, currentTool, lockSizes, showDeletedWalls },
       visibility: {
         wallVis: Object.fromEntries(wallVisibility.entries()),
         floorVis: Object.fromEntries(floorVisibility.entries())
@@ -140,20 +159,47 @@ function serializeFloorplan() {
   const rooms = [];
   const features = [];
 
-  // Rooms = rect[data-room] that are NOT features
-  svg.querySelectorAll(`rect[data-room]:not([data-feature])`).forEach(rect => {
-    const x = parseFloat(rect.getAttribute("x"));
-    const y = parseFloat(rect.getAttribute("y"));
-    const w = parseFloat(rect.getAttribute("width"));
-    const h = parseFloat(rect.getAttribute("height"));
+  // Rooms can be rectangles or polygons (angled / triangular rooms).
+  svg.querySelectorAll(ROOM_ELEMENT_SELECTOR).forEach(el => {
+    if (el.tagName.toLowerCase() === "polygon") {
+      rooms.push({
+        shape: el.dataset.shape || "polygon",
+        roomId: el.dataset.room,
+        roomName: el.dataset.roomName || "",
+        points: el.getAttribute("points") || "",
+        data: {
+          cutTlPx: el.dataset.cutTlPx || "0",
+          cutTrPx: el.dataset.cutTrPx || "0",
+          cutBrPx: el.dataset.cutBrPx || "0",
+          cutBlPx: el.dataset.cutBlPx || "0",
+          roomRotationDeg: el.dataset.roomRotationDeg || "0",
+          polySides: el.dataset.polySides || ""
+        }
+      });
+      return;
+    }
+
+    const x = parseFloat(el.getAttribute("x"));
+    const y = parseFloat(el.getAttribute("y"));
+    const w = parseFloat(el.getAttribute("width"));
+    const h = parseFloat(el.getAttribute("height"));
 
     rooms.push({
-      roomId: rect.dataset.room,
-      roomName: rect.dataset.roomName || "",
+      shape: "rect",
+      roomId: el.dataset.room,
+      roomName: el.dataset.roomName || "",
       x: isFinite(x) ? x : 0,
       y: isFinite(y) ? y : 0,
       width:  isFinite(w) ? w : 0,
-      height: isFinite(h) ? h : 0
+      height: isFinite(h) ? h : 0,
+      data: {
+        cutTlPx: el.dataset.cutTlPx || "0",
+        cutTrPx: el.dataset.cutTrPx || "0",
+        cutBrPx: el.dataset.cutBrPx || "0",
+        cutBlPx: el.dataset.cutBlPx || "0",
+        roomRotationDeg: el.dataset.roomRotationDeg || "0",
+        polySides: el.dataset.polySides || ""
+      }
     });
   });
 
@@ -176,7 +222,7 @@ function serializeFloorplan() {
     };
 
     // Dataset keys used by walls generator
-    const keysToCopy = ["side", "wallOffsetPx", "lengthPx", "windowHeadM"];
+    const keysToCopy = ["side", "wallIndex", "wallOffsetPx", "lengthPx", "windowHeadM"];
     for (const k of keysToCopy) {
       if (rect.dataset[k] != null) f.data[k] = rect.dataset[k];
     }
@@ -185,7 +231,7 @@ function serializeFloorplan() {
   });
 
   return {
-    version: 1,
+    version: 3,
     meta: {
       savedAt: new Date().toISOString(),
       studentName: currentStudentName || ""
@@ -197,7 +243,9 @@ function serializeFloorplan() {
     },
     ui: {
       joinedMode,
-      currentTool
+      currentTool,
+      lockSizes,
+      showDeletedWalls
     },
     visibility: {
       wallVis: Object.fromEntries(wallVisibility.entries()),
@@ -222,7 +270,7 @@ function clearFloorplanSvg() {
   if (!ensureSvgBound()) return;
 
   // Remove rooms + features
-  svg.querySelectorAll(`rect[data-feature], rect[data-room]`).forEach(n => n.remove());
+  svg.querySelectorAll(`rect[data-feature], rect[data-room], polygon[data-room]`).forEach(n => n.remove());
 
   // SAFER: only remove plan-side labels if you mark them.
   // (Avoid deleting any random <text> you might add later.)
@@ -239,7 +287,7 @@ function recomputeNextIdsFromSvg() {
   if (!ensureSvgBound()) return;
 
   let maxRoom = 0;
-  svg.querySelectorAll('rect[data-room]:not([data-feature])').forEach(r => {
+  svg.querySelectorAll(ROOM_ELEMENT_SELECTOR).forEach(r => {
     const n = extractTrailingInt(r.dataset.room);
     if (Number.isFinite(n)) maxRoom = Math.max(maxRoom, n);
   });
@@ -255,7 +303,7 @@ function recomputeNextIdsFromSvg() {
 
 function restoreFloorplanFromPayload(payload) {
   if (!ensureSvgBound()) return;
-  if (!payload || payload.version !== 1) return;
+  if (!payload || ![1, 2, 3].includes(payload.version)) return;
 
   _isRestoring = true;
   try {
@@ -266,6 +314,7 @@ if (payload.ui) {
   joinedMode  = !!payload.ui.joinedMode;
   currentTool = payload.ui.currentTool || currentTool;
   lockSizes   = !!payload.ui.lockSizes;
+  showDeletedWalls = !!payload.ui.showDeletedWalls;
 }
 
     // Student name
@@ -279,8 +328,30 @@ if (payload.ui) {
       floorVisibility = new Map(Object.entries(payload.visibility.floorVis || {}));
     }
 
-    // Recreate rooms (skip invalid sizes to avoid NaN junk)
+    // Recreate rooms (skip invalid sizes/points to avoid NaN junk)
 for (const r of payload.rooms || []) {
+  const shape = String(r.shape || (r.points ? "polygon" : "rect"));
+
+  if (shape !== "rect") {
+    const points = String(r.points || "").trim();
+    if (!points) continue;
+
+    const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    poly.setAttribute("points", points);
+    poly.setAttribute("fill", "rgba(0,0,0,0)");
+    poly.setAttribute("stroke", "black");
+    poly.setAttribute("stroke-width", "3");
+    poly.setAttribute("pointer-events", "visiblePainted");
+    poly.dataset.room = String(r.roomId);
+    poly.dataset.roomName = String(r.roomName || "");
+    poly.dataset.shape = shape;
+    if (r.data) {
+      for (const [k, v] of Object.entries(r.data)) poly.dataset[k] = String(v);
+    }
+    svg.appendChild(poly);
+    continue;
+  }
+
   const x = +r.x, y = +r.y, w = +r.width, h = +r.height;
   if (!isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) continue;
 
@@ -298,12 +369,12 @@ for (const r of payload.rooms || []) {
 
   rect.dataset.room = String(r.roomId);
   rect.dataset.roomName = String(r.roomName || "");
+  rect.dataset.shape = "rect";
+  if (r.data) {
+    for (const [k, v] of Object.entries(r.data)) rect.dataset[k] = String(v);
+  }
 
   svg.appendChild(rect);
-
-  // If you have these, call them here:
-  // ensureRoomLabel(rect);
-  // attachRoomRectEvents(rect);
 }
 
     // Recreate features (doors/windows)
@@ -382,7 +453,8 @@ function resetRoomPlannerStorage() {
     "floorVisibility",
     "studentName",
     "joinedMode",
-    "lockSizes"
+    "lockSizes",
+    "showDeletedWalls"
   ];
 
   knownKeys.forEach(k => localStorage.removeItem(k));
@@ -415,6 +487,30 @@ function bindStudentNameInputOnce() {
   });
 }
 
+function setShowDeletedWalls(value) {
+  showDeletedWalls = !!value;
+  if (showDeletedWallsChk) showDeletedWallsChk.checked = showDeletedWalls;
+  requestAutoSave("show deleted walls");
+  if (typeof rebuildWallsView === "function") rebuildWallsView();
+}
+
+function bindDeletedWallsControlsOnce() {
+  if (showDeletedWallsChk) {
+    showDeletedWallsChk.checked = !!showDeletedWalls;
+    showDeletedWallsChk.addEventListener("change", () => {
+      setShowDeletedWalls(showDeletedWallsChk.checked);
+    });
+  }
+
+  if (restoreDeletedWallsBtn) {
+    restoreDeletedWallsBtn.addEventListener("click", () => {
+      wallVisibility = new Map();
+      requestAutoSave("restore all walls");
+      if (typeof rebuildWallsView === "function") rebuildWallsView();
+    });
+  }
+}
+
 function getMaterialThicknessMm() {
   let t = parseFloat(materialThicknessInput?.value);
   if (!isFinite(t) || t < 0) t = 0;
@@ -440,7 +536,7 @@ function getRoomForFeature(feature) {
   if (!ensureSvgBound()) return null;
   const roomId = feature?.dataset?.room;
   if (!roomId) return null;
-  return svg.querySelector(`rect[data-room="${roomId}"]:not([data-feature])`);
+  return svg.querySelector(`[data-room="${roomId}"]:not([data-feature])`);
 }
 
 function getFeatureThickness(feature) {
@@ -449,9 +545,9 @@ function getFeatureThickness(feature) {
 
 function getRoomDisplayName(roomId) {
   if (!ensureSvgBound()) return `Room ${roomId}`;
-  const rect = svg.querySelector(`rect[data-room="${roomId}"]:not([data-feature])`);
-  if (!rect) return `Room ${roomId}`;
-  return rect.dataset.roomName || `Room ${roomId}`;
+  const room = svg.querySelector(`[data-room="${roomId}"]:not([data-feature])`);
+  if (!room) return `Room ${roomId}`;
+  return room.dataset.roomName || `Room ${roomId}`;
 }
 
 /**
@@ -510,9 +606,9 @@ function installFeatureAutoSaveObserver() {
         const touched = [...added, ...removed].some(n =>
           n && n.nodeType === 1 && (
             n.matches?.("rect[data-feature]") ||
-            n.matches?.("rect[data-room]") ||
+            n.matches?.(ROOM_ELEMENT_SELECTOR) ||
             n.querySelector?.("rect[data-feature]") ||
-            n.querySelector?.("rect[data-room]")
+            n.querySelector?.(ROOM_ELEMENT_SELECTOR)
           )
         );
         if (touched) {
@@ -523,7 +619,7 @@ function installFeatureAutoSaveObserver() {
 
       if (m.type === "attributes") {
         const el = m.target;
-        if (el && el.nodeType === 1 && el.matches?.("rect[data-feature], rect[data-room]")) {
+        if (el && el.nodeType === 1 && el.matches?.(`rect[data-feature], ${ROOM_ELEMENT_SELECTOR}`)) {
           requestAutoSave(`attr:${m.attributeName}`);
           return;
         }
@@ -536,12 +632,13 @@ function installFeatureAutoSaveObserver() {
     subtree: true,
     attributes: true,
     attributeFilter: [
-      "x", "y", "width", "height",
-      "data-wallOffsetPx", "data-lengthPx",
+      "x", "y", "width", "height", "points", "transform",
+      "data-wallOffsetPx", "data-lengthPx", "data-wallIndex",
       "data-windowHeadM", "data-side",
+      "data-cutTlPx", "data-cutTrPx", "data-cutBrPx", "data-cutBlPx", "data-roomRotationDeg", "data-polySides",
       "data-room", "data-feature",
       // IMPORTANT: this is what makes renames autosave:
-      "data-roomName",
+      "data-roomName", "data-shape",
       "data-featureId"
     ]
   });
@@ -557,6 +654,7 @@ function initCommon() {
   ensureSvgBound();
   const loaded = loadFloorplanFromLocalStorage();
   bindStudentNameInputOnce();
+  bindDeletedWallsControlsOnce();
   installFeatureAutoSaveObserver();
   if (typeof rebuildWallsView === "function") rebuildWallsView();
   return loaded;

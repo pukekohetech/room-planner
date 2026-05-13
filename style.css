@@ -501,6 +501,11 @@ button {
 .wall-label.disabled,
 .floor-label.disabled { opacity: 0.35; }
 
+/* Door/window hole display (UI only) */
+.hole-rect {
+  stroke-width: 1 !important;
+}
+
 /* ========================================
    13. Custom Scrollbars
    ======================================== */
@@ -565,3 +570,181 @@ button {
     border: none !important;
   }
    }
+
+
+/* Angled / polygon room support */
+#floorplan polygon[data-room]:not([data-feature]) {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 4px;
+  fill: transparent;
+  cursor: grab;
+}
+
+#floorplan polygon[data-room]:not([data-feature]):active {
+  cursor: grabbing;
+}
+
+#floorplan polygon[data-room]:not([data-feature]):hover {
+  stroke: rgba(37, 99, 235, 0.5);
+  stroke-dasharray: 4 3;
+}
+
+#floorplan .room-selected {
+  stroke: var(--brand) !important;
+  stroke-dasharray: 6 3;
+}
+
+
+/* Polygon and 45 degree corner cut controls */
+.polygon-add-control {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.polygon-sides-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+#polygonSidesInput {
+  width: 58px;
+}
+
+.polygon-editor,
+.corner-cut-editor {
+  width: 100%;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.55rem;
+  margin-top: 0.15rem;
+}
+
+.panel-subtitle {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--text);
+  margin-bottom: 0.35rem;
+}
+
+.corner-cut-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+}
+
+.corner-cut-grid label {
+  font-size: 0.75rem !important;
+}
+
+.corner-cut-grid input {
+  width: 100% !important;
+}
+
+.small-hint {
+  font-size: 0.75rem;
+  margin: 0.4rem 0 0;
+  color: var(--text-muted);
+}
+
+
+/* Room rotation controls */
+.rotation-editor {
+  width: 100%;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.55rem;
+  margin-top: 0.15rem;
+}
+
+.rotation-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: end;
+  gap: 0.45rem;
+}
+
+.rotation-row label {
+  width: 100%;
+}
+
+#roomRotationInput {
+  width: 100%;
+}
+
+#rotateLeftBtn,
+#rotateRightBtn {
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+
+/* Polygon vertex edit handles */
+.polygon-vertex-handle,
+.triangle-vertex-handle {
+  fill: #ffffff;
+  stroke: var(--brand);
+  stroke-width: 2px;
+  cursor: move;
+  vector-effect: non-scaling-stroke;
+}
+
+.polygon-vertex-handle:hover,
+.triangle-vertex-handle:hover {
+  fill: var(--brand-soft);
+}
+
+.walls-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.walls-toggle-label input {
+  width: auto;
+  height: auto;
+}
+
+#restoreDeletedWallsBtn {
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+
+/* Usability additions: polygon wall-point editing */
+.compact-buttons {
+  align-items: stretch;
+}
+
+#addWallPointBtn.tool-active,
+#insertWallPointBtn.tool-active {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.polygon-vertex-handle {
+  fill: #ffffff;
+  stroke: var(--brand);
+  stroke-width: 2.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.polygon-vertex-handle.selected {
+  fill: var(--brand);
+  stroke: #ffffff;
+  stroke-width: 3px;
+}
+
+#deletePolygonPointBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

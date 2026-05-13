@@ -42,6 +42,29 @@
           Add Room
         </button>
 
+        <div class="polygon-add-control">
+          <button id="addPolygonRoomBtn" type="button">
+            <svg width="10" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 3l8 6v9l-8 3-8-3V9z"/>
+            </svg>
+            Add Polygon Room
+          </button>
+          <label class="polygon-sides-label">
+            Walls
+            <input id="polygonSidesInput" type="number" min="3" max="12" step="1" value="3">
+          </label>
+        </div>
+
+        <button id="addWallPointBtn" type="button" title="Click a room edge to add an adjustable wall point">
+          <svg width="10" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 18L10 6l10 6"/>
+            <circle cx="10" cy="6" r="2"/>
+            <circle cx="4" cy="18" r="2"/>
+            <circle cx="20" cy="12" r="2"/>
+          </svg>
+          Add Wall Point
+        </button>
+
         <!-- Secondary tools -->
         <button id="addDoorBtn">
           <svg width="10" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -118,6 +141,37 @@
           <input id="heightInput" type="number" step="0.1" min="0.1">
         </label>
 
+        <div id="rotationEditor" class="rotation-editor">
+          <span class="panel-subtitle">Rotation</span>
+          <div class="rotation-row">
+            <button id="rotateLeftBtn" type="button">−15°</button>
+            <label>Degrees<input id="roomRotationInput" type="number" step="1" value="0"></label>
+            <button id="rotateRightBtn" type="button">+15°</button>
+          </div>
+          <p class="hint small-hint">Rotate the selected room around its centre. Works with rectangle, polygon, and corner-cut rooms.</p>
+        </div>
+
+        <div id="polygonEditor" class="polygon-editor">
+          <span class="panel-subtitle">Polygon room</span>
+          <label>Walls<input id="roomPolygonSidesInput" type="number" min="3" max="12" step="1" value="3"></label>
+          <div class="panel-buttons compact-buttons">
+            <button id="insertWallPointBtn" type="button">Add wall point</button>
+            <button id="deletePolygonPointBtn" type="button" class="danger-btn">Delete selected point</button>
+          </div>
+          <p class="hint small-hint">Use Add wall point, then click any room edge to create another adjustable wall. Select a blue node and drag or delete it.</p>
+        </div>
+
+        <div id="cornerCutEditor" class="corner-cut-editor">
+          <span class="panel-subtitle">45° corner cuts (m)</span>
+          <div class="corner-cut-grid">
+            <label>Top left<input id="cornerCutTlInput" type="number" step="0.1" min="0" value="0"></label>
+            <label>Top right<input id="cornerCutTrInput" type="number" step="0.1" min="0" value="0"></label>
+            <label>Bottom right<input id="cornerCutBrInput" type="number" step="0.1" min="0" value="0"></label>
+            <label>Bottom left<input id="cornerCutBlInput" type="number" step="0.1" min="0" value="0"></label>
+          </div>
+          <p class="hint small-hint">Use these on square/rectangular rooms to make one or more 45° cut-off corners.</p>
+        </div>
+
         <div class="panel-buttons">
           <button id="applySizeBtn" class="primary-btn">Apply</button>
           <button id="cancelSizeBtn">Cancel</button>
@@ -156,8 +210,9 @@
       <div id="wallsHint">
         <strong>Laser layout (730mm × 420mm):</strong>
         <p>
-          Tap/click a red wall strip or green floor to
-          toggle whether it will be cut. Faded pieces are “off”.
+          Tap/click a red wall strip to delete it from the laser layout. Turn on
+          “Show deleted walls” to see and restore removed wall strips. Tap/click
+          a green floor piece to toggle whether it will be cut.
         </p>
         <p class="hint">
           Labels are centred, in <span style="color:blue;">blue</span>,
@@ -199,6 +254,13 @@
           </label>
 
           <span class="hint">Laser bed: 730mm × 420mm</span>
+
+          <label class="walls-toggle-label">
+            <input id="showDeletedWallsChk" type="checkbox">
+            Show deleted walls
+          </label>
+
+          <button id="restoreDeletedWallsBtn" type="button">Restore walls</button>
 
           <!-- Prominent Download Button -->
           <button id="downloadSheetsBtn" class="primary-btn">

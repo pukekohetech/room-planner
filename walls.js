@@ -174,7 +174,180 @@ function clearWallsSvgToEmptySheet() {
 
 function getRooms() {
   if (!svg) return [];
-  return Array.from(svg.querySelectorAll('rect[data-room]:not([data-feature])'));
+  const selector =
+    typeof ROOM_ELEMENT_SELECTOR !== "undefined"
+      ? ROOM_ELEMENT_SELECTOR
+      : 'rect[data-room]:not([data-feature]), polygon[data-room]:not([data-feature])';
+  return Array.from(svg.querySelectorAll(selector));
+}
+
+function parseWallPoints(pointsString) {
+  return String(pointsString || "")
+    .trim()
+    .split(/\s+/)
+    .map((pair) => {
+      const [x, y] = pair.split(",").map(Number);
+      return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+    })
+    .filter(Boolean);
+}
+
+function getRoomPlanPoints(roomEl) {
+  if (!roomEl) return [];
+
+  if (roomEl.tagName?.toLowerCase() === "polygon") {
+    return parseWallPoints(roomEl.getAttribute("points"));
+  }
+
+  const x = parseFloat(roomEl.getAttribute("x"));
+  const y = parseFloat(roomEl.getAttribute("y"));
+  const w = parseFloat(roomEl.getAttribute("width"));
+  const h = parseFloat(roomEl.getAttribute("height"));
+  if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) return [];
+
+  return [
+    { x, y },
+    { x: x + w, y },
+    { x: x + w, y: y + h },
+    { x, y: y + h },
+  ];
+}
+
+function getPointsBounds(points) {
+  if (!points.length) return { x: 0, y: 0, w: 0, h: 0 };
+  const xs = points.map((pt) => pt.x);
+  const ys = points.map((pt) => pt.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function getPointsCentre(points) {
+  if (!points.length) return { x: 0, y: 0 };
+  const total = points.reduce((acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }), { x: 0, y: 0 });
+  return { x: total.x / points.length, y: total.y / points.length };
+}
+
+function rotateWallPointAround(point, centre, angleDeg) {
+  const rad = angleDeg * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = point.x - centre.x;
+  const dy = point.y - centre.y;
+  return {
+    x: centre.x + dx * cos - dy * sin,
+    y: centre.y + dx * sin + dy * cos,
+  };
+}
+
+function getRoomFloorLayoutPoints(roomEl) {
+  const points = getRoomPlanPoints(roomEl);
+  if (points.length < 3) return points;
+
+  // Wall pieces should reflect the rotated room, but floor pieces do not need
+  // to be rotated on the laser bed. Rotate the floor outline back to the
+  // room's unrotated/base orientation before laying it out.
+  const angle = parseFloat(roomEl?.dataset?.roomRotationDeg || "0") || 0;
+  if (Math.abs(angle) < 0.001) return points;
+
+  const centre = getPointsCentre(points);
+  return points.map((pt) => rotateWallPointAround(pt, centre, -angle));
+}
+
+function formatWallPoints(points) {
+  return points.map((pt) => `${Math.round(pt.x * 10) / 10},${Math.round(pt.y * 10) / 10}`).join(" ");
+}
+
+function getWallSideName(p1, p2, bounds, index) {
+  const midX = (p1.x + p2.x) / 2;
+  const midY = (p1.y + p2.y) / 2;
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const eps = 0.5;
+
+  if (Math.abs(dy) <= eps) {
+    return Math.abs(midY - bounds.y) <= Math.abs(midY - (bounds.y + bounds.h)) ? "top" : "bottom";
+  }
+  if (Math.abs(dx) <= eps) {
+    return Math.abs(midX - bounds.x) <= Math.abs(midX - (bounds.x + bounds.w)) ? "left" : "right";
+  }
+  return `angled ${index + 1}`;
+}
+
+
+function fixedForKey(value, places = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return (0).toFixed(places);
+  const p = Math.pow(10, places);
+  return (Math.round(n * p) / p).toFixed(places);
+}
+
+function getCanonicalSegmentData(p1, p2) {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const lengthPx = Math.hypot(dx, dy);
+  if (!Number.isFinite(lengthPx) || lengthPx < 1) return null;
+
+  let ux = dx / lengthPx;
+  let uy = dy / lengthPx;
+
+  // Use one stable direction for both ways along the same line.
+  if (ux < -0.000001 || (Math.abs(ux) <= 0.000001 && uy < 0)) {
+    ux = -ux;
+    uy = -uy;
+  }
+
+  const nx = -uy;
+  const ny = ux;
+  const axis = p1.x * nx + p1.y * ny;
+  const t1 = p1.x * ux + p1.y * uy;
+  const t2 = p2.x * ux + p2.y * uy;
+  const start = Math.min(t1, t2);
+  const end = Math.max(t1, t2);
+  const dirSign = t2 >= t1 ? 1 : -1;
+
+  return {
+    ux,
+    uy,
+    nx,
+    ny,
+    axis,
+    start,
+    end,
+    dirSign,
+    lengthPx,
+    groupKey: `d:${fixedForKey(ux, 3)}:${fixedForKey(uy, 3)}:${fixedForKey(axis, 1)}`,
+  };
+}
+
+function pushMergedWallSegment(list, current) {
+  if (!current) return;
+  current.lengthPx = current.end - current.start;
+  if (!Number.isFinite(current.lengthPx) || current.lengthPx < 1) return;
+
+  if (!current.key) {
+    if (current.orientation === "d") {
+      current.key = [
+        "d",
+        fixedForKey(current.ux, 3),
+        fixedForKey(current.uy, 3),
+        fixedForKey(current.axis, 1),
+        fixedForKey(current.start, 1),
+        fixedForKey(current.end, 1),
+      ].join(":");
+    } else {
+      current.key = [
+        current.orientation,
+        fixedForKey(current.axis, 1),
+        fixedForKey(current.start, 1),
+        fixedForKey(current.end, 1),
+      ].join(":");
+    }
+  }
+
+  list.push(current);
 }
 
 // ==========================================================
@@ -195,43 +368,77 @@ function rebuildWallsView() {
   const wallHeightPx = wallHeightM / SCALE_M_PER_PX;
   if (!isFinite(wallHeightPx) || wallHeightPx <= 0) return;
 
-  // 1) collect base wall segments (axis grouping)
+  // 1) collect wall segments from rectangles and polygon rooms.
+  // Horizontal, vertical, and diagonal walls are all grouped by their real line,
+  // then overlapping/touching sections are merged into one laser strip.
   const axisGroups = new Map();
+  const diagonalGroups = new Map();
 
-  rooms.forEach(roomRect => {
-    const roomId = roomRect.dataset.room;
+  rooms.forEach(roomEl => {
+    const roomId = roomEl.dataset.room;
+    const points = getRoomPlanPoints(roomEl);
+    if (points.length < 3) return;
 
-    const x = parseFloat(roomRect.getAttribute("x"));
-    const y = parseFloat(roomRect.getAttribute("y"));
-    const w = parseFloat(roomRect.getAttribute("width"));
-    const h = parseFloat(roomRect.getAttribute("height"));
-    if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) return;
+    const bounds = getPointsBounds(points);
 
-    const baseWalls = [
-      { side: "top",    orientation: "h", axis: y,     start: x,     end: x + w },
-      { side: "bottom", orientation: "h", axis: y + h, start: x,     end: x + w },
-      { side: "left",   orientation: "v", axis: x,     start: y,     end: y + h },
-      { side: "right",  orientation: "v", axis: x + w, start: y,     end: y + h }
-    ];
+    points.forEach((p1, i) => {
+      const p2 = points[(i + 1) % points.length];
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const lengthPx = Math.hypot(dx, dy);
+      if (!isFinite(lengthPx) || lengthPx < 1) return;
 
-    baseWalls.forEach(wall => {
-      const lengthPx = wall.end - wall.start;
-      if (lengthPx < 1) return;
+      const side = getWallSideName(p1, p2, bounds, i);
+      const eps = 0.5;
+      const isHorizontal = Math.abs(dy) <= eps;
+      const isVertical = Math.abs(dx) <= eps;
 
-      const axisKey = `${wall.orientation}:${wall.axis.toFixed(1)}`;
-      if (!axisGroups.has(axisKey)) axisGroups.set(axisKey, []);
-      axisGroups.get(axisKey).push({
+      if (isHorizontal || isVertical) {
+        const orientation = isHorizontal ? "h" : "v";
+        const axis = isHorizontal ? p1.y : p1.x;
+        const start = isHorizontal ? Math.min(p1.x, p2.x) : Math.min(p1.y, p2.y);
+        const end = isHorizontal ? Math.max(p1.x, p2.x) : Math.max(p1.y, p2.y);
+        const axisKey = `${orientation}:${fixedForKey(axis, 1)}`;
+
+        if (!axisGroups.has(axisKey)) axisGroups.set(axisKey, []);
+        axisGroups.get(axisKey).push({
+          roomId,
+          side,
+          orientation,
+          axis,
+          start,
+          end,
+          lengthPx: end - start,
+          index: i,
+          p1,
+          p2,
+        });
+        return;
+      }
+
+      const canonical = getCanonicalSegmentData(p1, p2);
+      if (!canonical) return;
+
+      if (!diagonalGroups.has(canonical.groupKey)) diagonalGroups.set(canonical.groupKey, []);
+      diagonalGroups.get(canonical.groupKey).push({
         roomId,
-        side: wall.side,
-        orientation: wall.orientation,
-        axis: wall.axis,
-        start: wall.start,
-        end: wall.end
+        side,
+        orientation: "d",
+        axis: canonical.axis,
+        start: canonical.start,
+        end: canonical.end,
+        lengthPx,
+        index: i,
+        p1,
+        p2,
+        ux: canonical.ux,
+        uy: canonical.uy,
+        dirSign: canonical.dirSign,
       });
     });
   });
 
-  // 2) merge overlaps on each axis
+  // 2) merge overlaps/touching runs on each line.
   const mergedSegments = [];
   const eps = 0.5;
 
@@ -249,12 +456,50 @@ function rebuildWallsView() {
         if (seg.end > current.end) current.end = seg.end;
         current.walls.push(seg);
       } else {
-        mergedSegments.push(current);
+        pushMergedWallSegment(mergedSegments, current);
         current = { orientation: seg.orientation, axis: seg.axis, start: seg.start, end: seg.end, walls: [seg] };
       }
     }
 
-    if (current) mergedSegments.push(current);
+    pushMergedWallSegment(mergedSegments, current);
+  });
+
+  diagonalGroups.forEach((segments) => {
+    segments.sort((a, b) => a.start - b.start);
+
+    let current = null;
+    for (const seg of segments) {
+      if (!current) {
+        current = {
+          orientation: "d",
+          axis: seg.axis,
+          start: seg.start,
+          end: seg.end,
+          ux: seg.ux,
+          uy: seg.uy,
+          walls: [seg],
+        };
+        continue;
+      }
+
+      if (seg.start <= current.end + eps) {
+        if (seg.end > current.end) current.end = seg.end;
+        current.walls.push(seg);
+      } else {
+        pushMergedWallSegment(mergedSegments, current);
+        current = {
+          orientation: "d",
+          axis: seg.axis,
+          start: seg.start,
+          end: seg.end,
+          ux: seg.ux,
+          uy: seg.uy,
+          walls: [seg],
+        };
+      }
+    }
+
+    pushMergedWallSegment(mergedSegments, current);
   });
 
   if (!mergedSegments.length) return;
@@ -288,12 +533,12 @@ function rebuildWallsView() {
   }
 
   mergedSegments.forEach(seg => {
-    const baseWidthPx = seg.end - seg.start;
+    const baseWidthPx = seg.lengthPx ?? (seg.end - seg.start);
     const wallWidthPx = baseWidthPx + thickness; // extend by 1 material thickness
     if (!isFinite(baseWidthPx) || baseWidthPx < 1) return;
     if (!isFinite(wallWidthPx) || wallWidthPx < 1) return;
 
-    const wallKey = [
+    const wallKey = seg.key || [
       seg.orientation,
       seg.axis.toFixed(1),
       seg.start.toFixed(1),
@@ -302,6 +547,8 @@ function rebuildWallsView() {
 
     if (!wallVisibility.has(wallKey)) wallVisibility.set(wallKey, true);
     const enabled = !!wallVisibility.get(wallKey);
+
+    if (!enabled && !(typeof showDeletedWalls !== "undefined" && showDeletedWalls)) return;
 
     if (cursorX + wallWidthPx + gapX > maxWidth) startNewRow();
 
@@ -327,7 +574,7 @@ function rebuildWallsView() {
     addTapHandler(hitPath, (e) => {
       const id = e.currentTarget.dataset.wallId;
       wallVisibility.set(id, !wallVisibility.get(id));
-      if (typeof requestAutoSave === "function") requestAutoSave("toggle wall");
+      if (typeof requestAutoSave === "function") requestAutoSave("delete/restore wall");
       rebuildWallsView();
       e.stopPropagation();
     });
@@ -382,10 +629,13 @@ function rebuildWallsView() {
       const openings = [];
 
       seg.walls.forEach(wall => {
-        const feats = svg.querySelectorAll(
-          `rect[data-feature][data-room="${wall.roomId}"][data-side="${wall.side}"]`
-        );
-        feats.forEach(f => openings.push({ feature: f, wall }));
+        const feats = svg.querySelectorAll(`rect[data-feature][data-room="${wall.roomId}"]`);
+        feats.forEach(f => {
+          const featureIndex = parseInt(f.dataset.wallIndex, 10);
+          const indexMatches = Number.isFinite(featureIndex) && featureIndex === wall.index;
+          const sideMatches = !Number.isFinite(featureIndex) && f.dataset.side === wall.side;
+          if (indexMatches || sideMatches) openings.push({ feature: f, wall });
+        });
       });
 
       const doorHeightPxConst = DOOR_HEIGHT_M / SCALE_M_PER_PX;
@@ -397,8 +647,27 @@ function rebuildWallsView() {
         let lenPx = parseFloat(feature.dataset.lengthPx);
         if (!isFinite(lenPx)) lenPx = 0;
 
-        const globalStart = wall.start + offPxLocal;
-        let offPx = globalStart - seg.start;
+        let offPx;
+        if (seg.orientation === "h") {
+          const dir = wall.p2.x >= wall.p1.x ? 1 : -1;
+          const globalCoord = wall.p1.x + dir * offPxLocal;
+          offPx = globalCoord - seg.start;
+          if (dir < 0) offPx -= lenPx;
+        } else if (seg.orientation === "v") {
+          const dir = wall.p2.y >= wall.p1.y ? 1 : -1;
+          const globalCoord = wall.p1.y + dir * offPxLocal;
+          offPx = globalCoord - seg.start;
+          if (dir < 0) offPx -= lenPx;
+        } else {
+          // Diagonal merged strips use a canonical left-to-right direction.
+          // A room edge may run the opposite way, so convert its local feature
+          // offset into the merged strip coordinate before drawing the hole.
+          if (wall.dirSign < 0) {
+            offPx = (wall.end - offPxLocal - lenPx) - seg.start;
+          } else {
+            offPx = (wall.start + offPxLocal) - seg.start;
+          }
+        }
 
         offPx = Math.max(0, Math.min(offPx, baseWidthPx));
         lenPx = Math.max(0, lenPx);
@@ -430,16 +699,17 @@ function rebuildWallsView() {
         }
 
         const holeRect = document.createElementNS(ns, "rect");
+        holeRect.classList.add("hole-rect");
         holeRect.setAttribute("x", holeX);
         holeRect.setAttribute("y", holeY);
         holeRect.setAttribute("width", holeWidth);
         holeRect.setAttribute("height", holeHeight);
         holeRect.setAttribute("fill", "none");
         holeRect.setAttribute("stroke", "rgb(255,0,0)");
-                
         holeRect.setAttribute("stroke-width", "0.026");
-        setExportFlag(holeRect, true);
-          holeRect.classList.add("wall-strip", enabled ? "enabled" : "disabled");
+        holeRect.classList.add("wall-strip", enabled ? "enabled" : "disabled");
+        // setExportFlag(wallPath, enabled);
+        setExportFlag(holeRect, enabled);
         wallsSvg.appendChild(holeRect);
       });
     }
@@ -478,8 +748,12 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
   let rowHeight = 0;
 
   rooms.forEach(r => {
-    const wPx = parseFloat(r.getAttribute("width"));
-    const hPx = parseFloat(r.getAttribute("height"));
+    const points = getRoomFloorLayoutPoints(r);
+    if (points.length < 3) return;
+
+    const bounds = getPointsBounds(points);
+    const wPx = bounds.w;
+    const hPx = bounds.h;
     if (!isFinite(wPx) || !isFinite(hPx) || wPx <= 0 || hPx <= 0) return;
 
     const roomId = r.dataset.room;
@@ -506,17 +780,28 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
 
     const ns = "http://www.w3.org/2000/svg";
 
-    const floorRect = document.createElementNS(ns, "rect");
-    floorRect.setAttribute("x", floorX);
-    floorRect.setAttribute("y", floorY);
-    floorRect.setAttribute("width",  wPx);
-    floorRect.setAttribute("height", hPx);
-    floorRect.dataset.floorId = roomId;
-    floorRect.classList.add("floor-strip", enabled ? "enabled" : "disabled");
-    floorRect.setAttribute("fill", "none");
-    floorRect.setAttribute("stroke", "rgb(255,0,0)");
-    floorRect.setAttribute("stroke-width", "0.026");
-    setExportFlag(floorRect, enabled);
+    let floorShape;
+    if (r.tagName?.toLowerCase() === "polygon") {
+      floorShape = document.createElementNS(ns, "polygon");
+      const localPoints = points.map((pt) => ({
+        x: floorX + (pt.x - bounds.x),
+        y: floorY + (pt.y - bounds.y),
+      }));
+      floorShape.setAttribute("points", formatWallPoints(localPoints));
+    } else {
+      floorShape = document.createElementNS(ns, "rect");
+      floorShape.setAttribute("x", floorX);
+      floorShape.setAttribute("y", floorY);
+      floorShape.setAttribute("width",  wPx);
+      floorShape.setAttribute("height", hPx);
+    }
+
+    floorShape.dataset.floorId = roomId;
+    floorShape.classList.add("floor-strip", enabled ? "enabled" : "disabled");
+    floorShape.setAttribute("fill", "none");
+    floorShape.setAttribute("stroke", "rgb(255,0,0)");
+    floorShape.setAttribute("stroke-width", "0.026");
+    setExportFlag(floorShape, enabled);
 
     const hit = makeFatHitRect(floorX, floorY, wPx, hPx, roomId);
 
@@ -529,7 +814,7 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
     });
 
     // Put hit above so taps work reliably
-    wallsSvg.appendChild(floorRect);
+    wallsSvg.appendChild(floorShape);
     wallsSvg.appendChild(hit);
 
     // Label (export only when enabled)
@@ -669,6 +954,11 @@ function initWallsView() {
 
   const downloadBtn = document.getElementById("downloadSheetsBtn");
   if (downloadBtn) downloadBtn.onclick = () => window.downloadAllSheetsAsSvg();
+
+  const showDeletedChk = document.getElementById("showDeletedWallsChk");
+  if (showDeletedChk && typeof showDeletedWalls !== "undefined") {
+    showDeletedChk.checked = !!showDeletedWalls;
+  }
 
   if (wallHeightInput) {
     wallHeightInput.addEventListener("change", () => {
