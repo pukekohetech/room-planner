@@ -47,6 +47,19 @@ function setNoFill(el) {
   el.setAttribute("fill", "none");
 }
 
+function setPlanModeHint(message, tone = "select") {
+  const banner = document.getElementById("planModeBanner");
+  if (!banner) return;
+  banner.textContent = message || "Select: drag rooms, use blue corner/edge to resize";
+  banner.dataset.tone = tone;
+}
+
+function clearRoomHoverClasses() {
+  svg?.querySelectorAll?.(".room-hover-resize, .room-hover-move").forEach((el) => {
+    el.classList.remove("room-hover-resize", "room-hover-move");
+  });
+}
+
 function ensureRoomRectLooksLikeARoom(rect) {
   if (!rect?.dataset?.room) return;
   rect.setAttribute("fill", "rgba(0,0,0,0)");
@@ -59,13 +72,329 @@ function ensureRoomRectLooksLikeARoom(rect) {
 
 function ensureFeatureRectLooksLikeAFeature(rect) {
   if (!rect?.dataset?.feature) return;
-  // Feature fill is used for UI differentiation
-  // (door/window). Stroke is optional in UI.
-  // Keep stroke off in UI unless you want it:
-  // setStroke(rect, 1, "black");
+  // Feature fill is used for UI differentiation (door/window).
+  rect.classList.add("feature-rect");
+  rect.classList.toggle("door-feature", rect.dataset.feature === "door");
+  rect.classList.toggle("window-feature", rect.dataset.feature === "window");
   rect.setAttribute("pointer-events", "visiblePainted");
+  rect.style.cursor = "pointer";
 }
 
+// -----------------------------------------
+// Background image tracing layer
+// -----------------------------------------
+const SVG_NS = "http://www.w3.org/2000/svg";
+const XLINK_NS = "http://www.w3.org/1999/xlink";
+let backgroundDragState = null;
+
+function getPlanViewBoxSize() {
+  if (!svg) return { width: 1600, height: 900 };
+  const vb = svg.viewBox?.baseVal;
+  return {
+    width: vb?.width || parseFloat(svg.getAttribute("width")) || 1600,
+    height: vb?.height || parseFloat(svg.getAttribute("height")) || 900,
+  };
+}
+
+function ensureBackgroundLayer() {
+  if (!svg) return null;
+  let layer = svg.querySelector("#planBackgroundLayer");
+  if (!layer) {
+    layer = document.createElementNS(SVG_NS, "g");
+    layer.setAttribute("id", "planBackgroundLayer");
+    layer.setAttribute("data-export", "0");
+    svg.insertBefore(layer, svg.firstChild || null);
+  } else if (svg.firstChild !== layer) {
+    svg.insertBefore(layer, svg.firstChild || null);
+  }
+  return layer;
+}
+
+function normaliseBackgroundState(state) {
+  if (!state || !state.href) return null;
+  const opacity = clampNumber(parseFloat(state.opacity), 0.1, 1);
+  return {
+    href: String(state.href),
+    x: Number.isFinite(parseFloat(state.x)) ? parseFloat(state.x) : 60,
+    y: Number.isFinite(parseFloat(state.y)) ? parseFloat(state.y) : 60,
+    width: Math.max(20, parseFloat(state.width) || 500),
+    height: Math.max(20, parseFloat(state.height) || 350),
+    opacity: Number.isFinite(opacity) ? opacity : 0.45,
+  };
+}
+
+function syncBackgroundControls() {
+  if (typeof editBackgroundChk !== "undefined" && editBackgroundChk) {
+    editBackgroundChk.checked = !!backgroundEditMode;
+    editBackgroundChk.disabled = !backgroundImageState;
+  }
+  if (typeof backgroundOpacityInput !== "undefined" && backgroundOpacityInput) {
+    backgroundOpacityInput.disabled = !backgroundImageState;
+    backgroundOpacityInput.value = String(backgroundImageState?.opacity ?? 0.45);
+  }
+  if (typeof clearBackgroundBtn !== "undefined" && clearBackgroundBtn) {
+    clearBackgroundBtn.disabled = !backgroundImageState;
+  }
+}
+
+function syncBackgroundDom() {
+  if (!svg) return;
+  const layer = ensureBackgroundLayer();
+  if (!layer) return;
+
+  backgroundImageState = normaliseBackgroundState(backgroundImageState);
+  layer.innerHTML = "";
+
+  if (!backgroundImageState) {
+    syncBackgroundControls();
+    return;
+  }
+
+  const img = document.createElementNS(SVG_NS, "image");
+  img.setAttribute("id", "planBackgroundImage");
+  img.setAttribute("href", backgroundImageState.href);
+  img.setAttributeNS(XLINK_NS, "xlink:href", backgroundImageState.href);
+  img.setAttribute("x", backgroundImageState.x);
+  img.setAttribute("y", backgroundImageState.y);
+  img.setAttribute("width", backgroundImageState.width);
+  img.setAttribute("height", backgroundImageState.height);
+  img.setAttribute("opacity", backgroundImageState.opacity);
+  img.setAttribute("preserveAspectRatio", "none");
+  img.setAttribute("pointer-events", backgroundEditMode ? "all" : "none");
+  img.classList.toggle("background-editable", !!backgroundEditMode);
+  layer.appendChild(img);
+
+  if (backgroundEditMode) {
+    const frame = document.createElementNS(SVG_NS, "rect");
+    frame.classList.add("background-image-frame");
+    frame.setAttribute("x", backgroundImageState.x);
+    frame.setAttribute("y", backgroundImageState.y);
+    frame.setAttribute("width", backgroundImageState.width);
+    frame.setAttribute("height", backgroundImageState.height);
+    layer.appendChild(frame);
+
+    const handle = document.createElementNS(SVG_NS, "circle");
+    handle.classList.add("background-image-handle");
+    handle.setAttribute("cx", backgroundImageState.x + backgroundImageState.width);
+    handle.setAttribute("cy", backgroundImageState.y + backgroundImageState.height);
+    handle.setAttribute("r", 8);
+    handle.setAttribute("pointer-events", "all");
+    layer.appendChild(handle);
+
+    bindBackgroundDragEvents(img, handle);
+  }
+
+  syncBackgroundControls();
+}
+
+function updateBackgroundDomWithoutRebuild() {
+  const layer = svg?.querySelector("#planBackgroundLayer");
+  const img = layer?.querySelector("#planBackgroundImage");
+  const frame = layer?.querySelector(".background-image-frame");
+  const handle = layer?.querySelector(".background-image-handle");
+  if (!backgroundImageState) return;
+  [img, frame].forEach((el) => {
+    if (!el) return;
+    el.setAttribute("x", backgroundImageState.x);
+    el.setAttribute("y", backgroundImageState.y);
+    el.setAttribute("width", backgroundImageState.width);
+    el.setAttribute("height", backgroundImageState.height);
+    if (el === img) el.setAttribute("opacity", backgroundImageState.opacity);
+  });
+  if (handle) {
+    handle.setAttribute("cx", backgroundImageState.x + backgroundImageState.width);
+    handle.setAttribute("cy", backgroundImageState.y + backgroundImageState.height);
+  }
+}
+
+function bindBackgroundDragEvents(img, handle) {
+  img.addEventListener("pointerdown", (e) => {
+    if (!backgroundEditMode || !backgroundImageState) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const start = getPointerPosition(e);
+    backgroundDragState = {
+      type: "move",
+      start,
+      x: backgroundImageState.x,
+      y: backgroundImageState.y,
+      width: backgroundImageState.width,
+      height: backgroundImageState.height,
+    };
+    try { img.setPointerCapture?.(e.pointerId); } catch {}
+  });
+
+  handle.addEventListener("pointerdown", (e) => {
+    if (!backgroundEditMode || !backgroundImageState) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const start = getPointerPosition(e);
+    backgroundDragState = {
+      type: "resize",
+      start,
+      x: backgroundImageState.x,
+      y: backgroundImageState.y,
+      width: backgroundImageState.width,
+      height: backgroundImageState.height,
+      aspect: backgroundImageState.width / Math.max(1, backgroundImageState.height),
+    };
+    try { handle.setPointerCapture?.(e.pointerId); } catch {}
+  });
+}
+
+function onBackgroundPointerMove(e) {
+  if (!backgroundDragState || !backgroundImageState) return;
+  e.preventDefault();
+  const pos = getPointerPosition(e);
+  const dx = pos.x - backgroundDragState.start.x;
+  const dy = pos.y - backgroundDragState.start.y;
+
+  if (backgroundDragState.type === "move") {
+    backgroundImageState.x = Math.round((backgroundDragState.x + dx) * 10) / 10;
+    backgroundImageState.y = Math.round((backgroundDragState.y + dy) * 10) / 10;
+  } else if (backgroundDragState.type === "resize") {
+    const minSize = 20;
+    let newW = Math.max(minSize, backgroundDragState.width + dx);
+    let newH = Math.max(minSize, backgroundDragState.height + dy);
+
+    // Default behaviour: keep the image proportional while resizing.
+    // Hold Shift to freely stretch width/height independently.
+    if (!e.shiftKey) {
+      const aspect = Number.isFinite(backgroundDragState.aspect) && backgroundDragState.aspect > 0
+        ? backgroundDragState.aspect
+        : backgroundDragState.width / Math.max(1, backgroundDragState.height);
+
+      const scaleFromW = newW / Math.max(1, backgroundDragState.width);
+      const scaleFromH = newH / Math.max(1, backgroundDragState.height);
+      const scale = Math.max(scaleFromW, scaleFromH, minSize / Math.max(1, backgroundDragState.width), minSize / Math.max(1, backgroundDragState.height));
+
+      newW = Math.max(minSize, backgroundDragState.width * scale);
+      newH = Math.max(minSize, newW / aspect);
+    }
+
+    backgroundImageState.width = Math.round(newW * 10) / 10;
+    backgroundImageState.height = Math.round(newH * 10) / 10;
+  }
+
+  updateBackgroundDomWithoutRebuild();
+}
+
+function endBackgroundDrag() {
+  if (!backgroundDragState) return;
+  backgroundDragState = null;
+  requestAutoSave?.("background image edit");
+}
+
+function setBackgroundImageFromDataUrl(dataUrl, naturalWidth = 800, naturalHeight = 600) {
+  if (!dataUrl) return;
+  const view = getPlanViewBoxSize();
+  const aspect = naturalWidth > 0 && naturalHeight > 0 ? naturalWidth / naturalHeight : 4 / 3;
+  let width = Math.min(view.width * 0.65, Math.max(220, naturalWidth || 600));
+  let height = width / aspect;
+  if (height > view.height * 0.65) {
+    height = view.height * 0.65;
+    width = height * aspect;
+  }
+
+  backgroundImageState = {
+    href: dataUrl,
+    x: Math.round((view.width - width) / 2),
+    y: Math.round((view.height - height) / 2),
+    width: Math.round(width),
+    height: Math.round(height),
+    opacity: parseFloat(backgroundOpacityInput?.value) || 0.45,
+  };
+  backgroundEditMode = true;
+  syncBackgroundDom();
+  setPlanModeHint("Background image added: drag it, drag the orange corner to resize proportionally, hold Shift to stretch", "point");
+  requestAutoSave?.("set background image");
+}
+
+function loadBackgroundImageFile(file) {
+  if (!file || !String(file.type || "").startsWith("image/")) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = String(reader.result || "");
+    const probe = new Image();
+    probe.onload = () => setBackgroundImageFromDataUrl(dataUrl, probe.naturalWidth, probe.naturalHeight);
+    probe.onerror = () => setBackgroundImageFromDataUrl(dataUrl);
+    probe.src = dataUrl;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function tryReadImageFromClipboard() {
+  if (navigator.clipboard?.read) {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((t) => t.startsWith("image/"));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        loadBackgroundImageFile(blob);
+        return true;
+      }
+    } catch (err) {
+      // Browser may block direct clipboard reads; Ctrl+V paste still works.
+    }
+  }
+  setPlanModeHint("Copy an image, then press Ctrl+V while this page is open", "point");
+  return false;
+}
+
+function handleBackgroundPasteEvent(e) {
+  const items = Array.from(e.clipboardData?.items || []);
+  const imageItem = items.find((item) => String(item.type || "").startsWith("image/"));
+  if (!imageItem) return;
+  const file = imageItem.getAsFile();
+  if (!file) return;
+  e.preventDefault();
+  loadBackgroundImageFile(file);
+}
+
+function installBackgroundImageControls() {
+  syncBackgroundDom();
+
+  importBackgroundBtn?.addEventListener("click", () => backgroundImageInput?.click());
+  backgroundImageInput?.addEventListener("change", () => {
+    const file = backgroundImageInput.files?.[0];
+    if (file) loadBackgroundImageFile(file);
+    backgroundImageInput.value = "";
+  });
+  pasteBackgroundBtn?.addEventListener("click", () => tryReadImageFromClipboard());
+  document.addEventListener("paste", handleBackgroundPasteEvent);
+
+  editBackgroundChk?.addEventListener("change", () => {
+    backgroundEditMode = !!editBackgroundChk.checked;
+    syncBackgroundDom();
+    setPlanModeHint(
+      backgroundEditMode && backgroundImageState
+        ? "Background edit mode: drag image or orange corner. Turn off to edit rooms."
+        : "Select: drag room body to move, drag blue corner/edge to resize",
+      backgroundEditMode && backgroundImageState ? "point" : "select"
+    );
+    requestAutoSave?.("background edit mode");
+  });
+
+  backgroundOpacityInput?.addEventListener("input", () => {
+    if (!backgroundImageState) return;
+    backgroundImageState.opacity = clampNumber(parseFloat(backgroundOpacityInput.value), 0.1, 1);
+    updateBackgroundDomWithoutRebuild();
+    requestAutoSave?.("background opacity");
+  });
+
+  clearBackgroundBtn?.addEventListener("click", () => {
+    backgroundImageState = null;
+    backgroundEditMode = false;
+    syncBackgroundDom();
+    setPlanModeHint("Background image cleared", "select");
+    requestAutoSave?.("clear background image");
+  });
+
+  window.addEventListener("pointermove", onBackgroundPointerMove);
+  window.addEventListener("pointerup", endBackgroundDrag);
+  window.addEventListener("pointercancel", endBackgroundDrag);
+}
 
 // -----------------------------------------
 // Room geometry helpers (rectangles + polygons)
@@ -574,6 +903,31 @@ function readCornerEditorCutsPx() {
 
 
 // -----------------------------------------
+// Undo / Redo keyboard shortcuts
+// -----------------------------------------
+document.addEventListener("keydown", (e) => {
+  const key = String(e.key || "").toLowerCase();
+  const wantsUndo = (e.ctrlKey || e.metaKey) && key === "z" && !e.shiftKey;
+  const wantsRedo = (e.ctrlKey || e.metaKey) && (key === "y" || (key === "z" && e.shiftKey));
+
+  if (!wantsUndo && !wantsRedo) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  const ok = wantsUndo
+    ? (typeof undoFloorplan === "function" && undoFloorplan())
+    : (typeof redoFloorplan === "function" && redoFloorplan());
+
+  setPlanModeHint(
+    ok
+      ? (wantsUndo ? "Undo" : "Redo")
+      : (wantsUndo ? "Nothing to undo" : "Nothing to redo"),
+    ok ? "select" : "point"
+  );
+}, true);
+
+// -----------------------------------------
 // ZOOM + PAN (viewBox only)
 // -----------------------------------------
 function installPlanViewZoom(svgEl) {
@@ -1004,6 +1358,7 @@ function deleteSelectedThing() {
     const feature = selectedFeature;
     removeFeatureHandles();
     removeFeatureLabel(feature);
+    feature.classList?.remove("feature-selected");
     feature.parentNode?.removeChild(feature);
     selectedFeature = null;
     featureInfo.style.display = "none";
@@ -1045,6 +1400,7 @@ function createTriangleVertexHandles(roomEl) {
 
       function onMove(ev) {
         ev.preventDefault();
+        setPlanModeHint("Dragging polygon point — it will snap to nearby walls", "point");
         const pos = getPointerPosition(ev);
         const dx = pos.x - startPoint.x;
         const dy = pos.y - startPoint.y;
@@ -1226,11 +1582,27 @@ function removeFeatureLabel(feature) {
 function setTool(tool) {
   currentTool = tool;
   [addDoorBtn, addWindowBtn, addWallPointBtn, insertWallPointBtn].forEach((btn) => btn?.classList.remove("tool-active"));
-  if (tool === "addDoor") addDoorBtn?.classList.add("tool-active");
-  if (tool === "addWindow") addWindowBtn?.classList.add("tool-active");
-  if (tool === "addWallPoint") {
+  svg?.classList?.remove("tool-add-door", "tool-add-window", "tool-add-wall-point");
+
+  if (tool === "addDoor") {
+    addDoorBtn?.classList.add("tool-active");
+    svg?.classList?.add("tool-add-door");
+    setPlanModeHint("ADD DOOR: click the wall where the door should go", "door");
+  } else if (tool === "addWindow") {
+    addWindowBtn?.classList.add("tool-active");
+    svg?.classList?.add("tool-add-window");
+    setPlanModeHint("ADD WINDOW: click the wall where the window should go", "window");
+  } else if (tool === "addWallPoint") {
     addWallPointBtn?.classList.add("tool-active");
     insertWallPointBtn?.classList.add("tool-active");
+    svg?.classList?.add("tool-add-wall-point");
+    setPlanModeHint("ADD WALL POINT: click any room edge to add a draggable corner", "point");
+  } else {
+    if (selectedFeature) {
+      setPlanModeHint("Selected door/window: drag white handle to move, blue handle to resize", "feature");
+    } else {
+      setPlanModeHint("Select: drag room body to move, drag blue corner/edge to resize", "select");
+    }
   }
 
   svg.style.cursor = tool === "addDoor" || tool === "addWindow" || tool === "addWallPoint" ? "crosshair" : "default";
@@ -1368,6 +1740,8 @@ function updateRoomLabel(rect) {
 
   const cx = centre.x;
   const cy = centre.y;
+  const minDim = Math.min(Math.abs(w), Math.abs(h));
+  const area = Math.abs(w * h);
 
   label.setAttribute("x", cx);
   label.setAttribute("y", cy);
@@ -1378,13 +1752,37 @@ function updateRoomLabel(rect) {
   const roomName = rect.dataset.roomName || `Room ${id}`;
   const sizeText = formatSizeLabel?.(w, h) ?? "";
 
+  // Adaptive labels: keep normal labels readable, but shrink or hide details
+  // on small rooms so text does not cover walls, doors, windows, or handles.
+  let labelMode = "normal";
+  let fontSize = UI_LABEL_FONT_SIZE;
+  let showSize = true;
+  let showLabel = true;
+
+  if (minDim < 70) {
+    labelMode = "small";
+    fontSize = clampNumber(minDim * 0.16, 3.5, UI_LABEL_FONT_SIZE);
+    showSize = minDim >= 48 && area >= 2200;
+  }
+  if (minDim < 28 || area < 900) {
+    labelMode = "tiny";
+    showLabel = false;
+  }
+
+  label.dataset.labelMode = labelMode;
+  label.style.display = showLabel ? "" : "none";
+  label.setAttribute("font-size", String(Math.round(fontSize * 10) / 10));
+  label.setAttribute("pointer-events", labelMode === "normal" ? "auto" : "none");
+
   if (nameTspan) {
     nameTspan.textContent = roomName;
     nameTspan.setAttribute("x", cx);
+    nameTspan.setAttribute("dy", showSize ? "-0.3em" : "0.35em");
   }
   if (sizeTspan) {
-    sizeTspan.textContent = sizeText;
+    sizeTspan.textContent = showSize ? sizeText : "";
     sizeTspan.setAttribute("x", cx);
+    sizeTspan.setAttribute("dy", "1.2em");
   }
 }
 
@@ -1416,30 +1814,46 @@ function closeSizeEditor() {
   editingRoomId = null;
 }
 
-applySizeBtn?.addEventListener("click", () => {
-  if (!editingRoomId) return;
+function getRoomBeingEdited() {
+  const roomId = editingRoomId || selectedRoomRect?.dataset?.room;
+  if (!roomId) return null;
+  return svg.querySelector(`[data-room="${roomId}"]:not([data-feature])`);
+}
 
-  let roomEl = svg.querySelector(`[data-room="${editingRoomId}"]:not([data-feature])`);
+function readPositiveMetresInput(input, fallbackPx) {
+  const value = parseFloat(input?.value);
+  if (!isFinite(value) || value <= 0) return fallbackPx * SCALE_M_PER_PX;
+  return value;
+}
+
+function applyRoomEditorChanges(options = {}) {
+  const closeAfter = !!options.closeAfter;
+  const reason = options.reason || "live room edit";
+
+  let roomEl = getRoomBeingEdited();
   if (!roomEl) {
-    closeSizeEditor();
-    return;
+    if (closeAfter) closeSizeEditor();
+    return null;
   }
 
-  const newName = roomNameInput.value.trim();
-  roomEl.dataset.roomName = newName || `Room ${editingRoomId}`;
+  const roomId = roomEl.dataset.room;
+  editingRoomId = roomId;
+
+  const newName = roomNameInput?.value?.trim?.() || `Room ${roomId}`;
+  roomEl.dataset.roomName = newName;
 
   const currentBaseGeom = getRoomBaseGeometry(roomEl);
-  const currentWpx = currentBaseGeom.w;
-  const currentHpx = currentBaseGeom.h;
+  const currentWpx = Math.max(15, currentBaseGeom.w || 15);
+  const currentHpx = Math.max(15, currentBaseGeom.h || 15);
 
-  let newWm = parseFloat(widthInput.value);
-  let newHm = parseFloat(heightInput.value);
+  const newWm = readPositiveMetresInput(widthInput, currentWpx);
+  const newHm = readPositiveMetresInput(heightInput, currentHpx);
 
-  if (!isFinite(newWm) || newWm <= 0) newWm = currentWpx * SCALE_M_PER_PX;
-  if (!isFinite(newHm) || newHm <= 0) newHm = currentHpx * SCALE_M_PER_PX;
-
-  const requestedRotation = (typeof roomRotationInput !== "undefined" && roomRotationInput)
+  const requestedRotationRaw = (typeof roomRotationInput !== "undefined" && roomRotationInput)
     ? parseFloat(roomRotationInput.value)
+    : getRoomRotationDeg(roomEl);
+  const requestedRotation = isFinite(requestedRotationRaw)
+    ? requestedRotationRaw
     : getRoomRotationDeg(roomEl);
 
   // Apply size/corner changes in the room's unrotated coordinate space, then rotate back.
@@ -1448,28 +1862,82 @@ applySizeBtn?.addEventListener("click", () => {
   resizeRoomFromStart(roomEl, currentGeom, newWm / SCALE_M_PER_PX, newHm / SCALE_M_PER_PX);
 
   if (isFlexiblePolygonRoom(roomEl)) {
-    const requestedSides = clampPolygonSideCount(roomPolygonSidesInput?.value, getRoomPoints(roomEl).length || 3);
-    if (requestedSides !== getRoomPoints(roomEl).length) {
-      roomEl = rebuildFlexiblePolygonWithSides(roomEl, requestedSides);
-      roomEl = rotateRoomTo(roomEl, 0);
-    } else {
-      roomEl.dataset.shape = "polygon";
-      roomEl.dataset.polySides = String(getRoomPoints(roomEl).length);
+    const parsedSides = parseInt(roomPolygonSidesInput?.value, 10);
+    if (Number.isFinite(parsedSides) && parsedSides >= 3) {
+      const requestedSides = clampPolygonSideCount(parsedSides, getRoomPoints(roomEl).length || 3);
+      if (requestedSides !== getRoomPoints(roomEl).length) {
+        roomEl = rebuildFlexiblePolygonWithSides(roomEl, requestedSides);
+        roomEl = rotateRoomTo(roomEl, 0);
+      }
     }
+    roomEl.dataset.shape = "polygon";
+    roomEl.dataset.polySides = String(getRoomPoints(roomEl).length);
   } else {
     roomEl = applyCornerCutsToRoom(roomEl, readCornerEditorCutsPx());
   }
 
   roomEl = rotateRoomTo(roomEl, requestedRotation);
-  updateRotationEditorValue(roomEl);
-
   updateRoomLabel(roomEl);
   updateFeaturesForRoom(roomEl);
   setSelectedRoomRect(roomEl);
+
+  // Do not rewrite the field the user is actively typing into. That keeps
+  // values like "0." or "12.5" from being reformatted mid-edit.
+  const activeId = document.activeElement?.id || "";
+  const activeIsRoomEditorField = [
+    "roomNameInput",
+    "widthInput",
+    "heightInput",
+    "roomRotationInput",
+    "cornerCutTlInput",
+    "cornerCutTrInput",
+    "cornerCutBrInput",
+    "cornerCutBlInput",
+    "roomPolygonSidesInput",
+  ].includes(activeId);
+
+  if (closeAfter || !activeIsRoomEditorField) {
+    updateRotationEditorValue(roomEl);
+    setCornerEditorValues(roomEl);
+    setPolygonEditorValues(roomEl);
+  } else {
+    if (!activeId.startsWith("cornerCut")) setCornerEditorValues(roomEl);
+    if (activeId !== "roomPolygonSidesInput") setPolygonEditorValues(roomEl);
+  }
+
+  updatePolygonPointButtonState?.();
   updateTriangleVertexHandlesPosition();
   rebuildWallsView();
-  requestAutoSave?.("apply room edit");
-  closeSizeEditor();
+  requestAutoSave?.(reason);
+
+  if (closeAfter) closeSizeEditor();
+  return roomEl;
+}
+
+function scheduleLiveRoomEditorApply(reason = "live room edit") {
+  if (!editingRoomId && !selectedRoomRect) return;
+  applyRoomEditorChanges({ reason });
+}
+
+applySizeBtn?.addEventListener("click", () => {
+  applyRoomEditorChanges({ closeAfter: true, reason: "finish room edit" });
+});
+
+const liveRoomEditorInputs = [
+  roomNameInput,
+  widthInput,
+  heightInput,
+  roomRotationInput,
+  cornerCutTlInput,
+  cornerCutTrInput,
+  cornerCutBrInput,
+  cornerCutBlInput,
+  roomPolygonSidesInput,
+].filter(Boolean);
+
+liveRoomEditorInputs.forEach((input) => {
+  input.addEventListener("input", () => scheduleLiveRoomEditorApply("live room edit"));
+  input.addEventListener("change", () => scheduleLiveRoomEditorApply("live room edit"));
 });
 
 cancelSizeBtn?.addEventListener("click", closeSizeEditor);
@@ -1496,36 +1964,6 @@ const rotateRightBtn = document.getElementById("rotateRightBtn");
 
 rotateLeftBtn?.addEventListener("click", () => rotateEditingRoomBy(-15));
 rotateRightBtn?.addEventListener("click", () => rotateEditingRoomBy(15));
-roomRotationInput?.addEventListener("change", () => {
-  const roomId = editingRoomId || selectedRoomRect?.dataset?.room;
-  if (!roomId) return;
-  let roomEl = svg.querySelector(`[data-room="${roomId}"]:not([data-feature])`);
-  if (!roomEl) return;
-  roomEl = rotateRoomTo(roomEl, parseFloat(roomRotationInput.value));
-  updateRotationEditorValue(roomEl);
-  updateRoomLabel(roomEl);
-  updateFeaturesForRoom(roomEl);
-  setSelectedRoomRect(roomEl);
-  updateTriangleVertexHandlesPosition();
-  rebuildWallsView();
-  requestAutoSave?.("rotate room input");
-});
-
-roomPolygonSidesInput?.addEventListener("change", () => {
-  const roomId = editingRoomId || selectedRoomRect?.dataset?.room;
-  if (!roomId) return;
-  let roomEl = svg.querySelector(`[data-room="${roomId}"]:not([data-feature])`);
-  if (!isFlexiblePolygonRoom(roomEl)) return;
-  roomEl = rebuildFlexiblePolygonWithSides(roomEl, roomPolygonSidesInput.value);
-  setPolygonEditorValues(roomEl);
-  updateRotationEditorValue(roomEl);
-  updateRoomLabel(roomEl);
-  updateFeaturesForRoom(roomEl);
-  setSelectedRoomRect(roomEl);
-  updateTriangleVertexHandlesPosition();
-  rebuildWallsView();
-  requestAutoSave?.("change polygon wall count");
-});
 
 deleteRoomBtn?.addEventListener("click", () => {
   const roomId = editingRoomId || selectedRoomRect?.dataset?.room;
@@ -1581,6 +2019,18 @@ function updateFeaturesForRoom(roomRect) {
 }
 
 function bindFeatureEvents(feature) {
+  if (feature.dataset.eventsBound === "1") return;
+  feature.dataset.eventsBound = "1";
+
+  feature.addEventListener("pointerenter", () => {
+    const kind = feature.dataset.feature === "door" ? "door" : "window";
+    setPlanModeHint(`Select ${kind}: click it, then drag white/blue handles`, "feature");
+  });
+
+  feature.addEventListener("pointerleave", () => {
+    if (!selectedFeature) setPlanModeHint("Select: drag room body to move, drag blue corner/edge to resize", "select");
+  });
+
   feature.addEventListener("click", (e) => {
     openFeatureInfo(feature);
     e.stopPropagation();
@@ -1610,7 +2060,15 @@ function createFeatureOnRoom(roomRect, kind, clickPos) {
   feature.dataset.lengthPx = String(lengthPx);
 
   if (kind === "window") {
+    const startM = Math.max(0, WINDOW_HEAD_DEFAULT_M - WINDOW_HEIGHT_DEFAULT_M);
+    feature.dataset.openingStartM = String(startM);
+    feature.dataset.openingEndM = String(WINDOW_HEAD_DEFAULT_M);
+    feature.dataset.windowSillM = String(startM);
     feature.dataset.windowHeadM = String(WINDOW_HEAD_DEFAULT_M);
+  } else {
+    feature.dataset.openingStartM = "0";
+    feature.dataset.openingEndM = String(DOOR_HEIGHT_M);
+    feature.dataset.doorHeightM = String(DOOR_HEIGHT_M);
   }
 
   feature.style.cursor = "pointer";
@@ -1622,16 +2080,62 @@ function createFeatureOnRoom(roomRect, kind, clickPos) {
 
   svg.appendChild(feature);
 
+  openFeatureInfo(feature);
   rebuildWallsView();
   requestAutoSave?.("create feature");
 }
 
 // Feature editor panel (your existing UI)
 function openFeatureInfo(feature) {
+  if (selectedFeature && selectedFeature !== feature) selectedFeature.classList.remove("feature-selected");
   selectedFeature = feature;
+  feature?.classList?.add("feature-selected");
   updateFeatureInfoFields(feature);
   featureInfo.style.display = "flex";
   createFeatureHandles(feature);
+  setPlanModeHint("Selected door/window: drag white handle to move, blue handle to resize", "feature");
+}
+
+function getFeatureOpeningHeights(feature) {
+  const kind = feature?.dataset?.feature;
+  let startM = parseFloat(feature?.dataset?.openingStartM);
+  let endM = parseFloat(feature?.dataset?.openingEndM);
+
+  if (kind === "window") {
+    const legacyHead = parseFloat(feature?.dataset?.windowHeadM);
+    const legacySill = parseFloat(feature?.dataset?.windowSillM);
+    if (!isFinite(endM)) endM = isFinite(legacyHead) ? legacyHead : WINDOW_HEAD_DEFAULT_M;
+    if (!isFinite(startM)) startM = isFinite(legacySill) ? legacySill : endM - WINDOW_HEIGHT_DEFAULT_M;
+  } else {
+    const legacyDoorHeight = parseFloat(feature?.dataset?.doorHeightM);
+    if (!isFinite(startM)) startM = 0;
+    if (!isFinite(endM)) endM = isFinite(legacyDoorHeight) ? startM + legacyDoorHeight : DOOR_HEIGHT_M;
+  }
+
+  startM = isFinite(startM) ? Math.max(0, startM) : 0;
+  endM = isFinite(endM) ? Math.max(0.1, endM) : (kind === "window" ? WINDOW_HEAD_DEFAULT_M : DOOR_HEIGHT_M);
+  if (endM > wallHeightM) endM = wallHeightM;
+  if (startM >= endM) startM = Math.max(0, endM - 0.1);
+
+  return { startM, endM, heightM: Math.max(0.1, endM - startM) };
+}
+
+function setFeatureOpeningHeights(feature, startM, endM) {
+  if (!feature) return;
+  startM = isFinite(startM) ? Math.max(0, startM) : 0;
+  endM = isFinite(endM) ? Math.max(0.1, endM) : (feature.dataset.feature === "window" ? WINDOW_HEAD_DEFAULT_M : DOOR_HEIGHT_M);
+  if (endM > wallHeightM) endM = wallHeightM;
+  if (startM >= endM) startM = Math.max(0, endM - 0.1);
+
+  feature.dataset.openingStartM = String(startM);
+  feature.dataset.openingEndM = String(endM);
+
+  if (feature.dataset.feature === "window") {
+    feature.dataset.windowSillM = String(startM);
+    feature.dataset.windowHeadM = String(endM);
+  } else {
+    feature.dataset.doorHeightM = String(Math.max(0.1, endM - startM));
+  }
 }
 
 function updateFeatureInfoFields(feature) {
@@ -1646,20 +2150,24 @@ function updateFeatureInfoFields(feature) {
   featureWidthInput.value = (lengthPx * SCALE_M_PER_PX).toFixed(2);
   featureOffsetInput.value = (wallOffsetPx * SCALE_M_PER_PX).toFixed(2);
 
-  if (feature.dataset.feature === "window") {
-    const headM = parseFloat(feature.dataset.windowHeadM) || WINDOW_HEAD_DEFAULT_M;
-    featureHeadInput.disabled = false;
-    featureHeadInput.value = headM.toFixed(2);
-  } else {
-    featureHeadInput.disabled = true;
-    featureHeadInput.value = "";
-  }
+  const opening = getFeatureOpeningHeights(feature);
+  const isWindow = feature.dataset.feature === "window";
+
+  if (windowHeightFields) windowHeightFields.style.display = isWindow ? "block" : "none";
+  if (doorHeightFields) doorHeightFields.style.display = isWindow ? "none" : "block";
+
+  if (featureStartHeightInput) featureStartHeightInput.value = opening.startM.toFixed(2);
+  if (featureEndHeightInput) featureEndHeightInput.value = opening.endM.toFixed(2);
+  if (featureDoorHeightInput) featureDoorHeightInput.value = opening.heightM.toFixed(2);
+  if (featureHeadInput) featureHeadInput.value = opening.endM.toFixed(2);
 }
 
 function closeFeatureSelection() {
+  selectedFeature?.classList?.remove("feature-selected");
   selectedFeature = null;
   featureInfo.style.display = "none";
   removeFeatureHandles();
+  setPlanModeHint("Select: drag room body to move, drag blue corner/edge to resize", "select");
 }
 
 function applyFeatureInputs() {
@@ -1690,10 +2198,15 @@ function applyFeatureInputs() {
   selectedFeature.dataset.lengthPx = String(lengthPx);
 
   if (selectedFeature.dataset.feature === "window") {
-    let headM = parseFloat(featureHeadInput.value);
-    if (!isFinite(headM) || headM <= 0) headM = WINDOW_HEAD_DEFAULT_M;
-    if (headM > wallHeightM) headM = wallHeightM;
-    selectedFeature.dataset.windowHeadM = String(headM);
+    let startM = parseFloat(featureStartHeightInput?.value);
+    let endM = parseFloat(featureEndHeightInput?.value);
+    if (!isFinite(startM)) startM = getFeatureOpeningHeights(selectedFeature).startM;
+    if (!isFinite(endM)) endM = getFeatureOpeningHeights(selectedFeature).endM;
+    setFeatureOpeningHeights(selectedFeature, startM, endM);
+  } else {
+    let doorHeightM = parseFloat(featureDoorHeightInput?.value);
+    if (!isFinite(doorHeightM) || doorHeightM <= 0) doorHeightM = getFeatureOpeningHeights(selectedFeature).heightM;
+    setFeatureOpeningHeights(selectedFeature, 0, doorHeightM);
   }
 
   updateFeaturePosition(selectedFeature);
@@ -1706,6 +2219,9 @@ function applyFeatureInputs() {
 featureWidthInput?.addEventListener("change", applyFeatureInputs);
 featureOffsetInput?.addEventListener("change", applyFeatureInputs);
 featureHeadInput?.addEventListener("change", applyFeatureInputs);
+featureStartHeightInput?.addEventListener("change", applyFeatureInputs);
+featureEndHeightInput?.addEventListener("change", applyFeatureInputs);
+featureDoorHeightInput?.addEventListener("change", applyFeatureInputs);
 
 deleteFeatureBtn?.addEventListener("click", () => {
   if (!selectedFeature) return;
@@ -1752,6 +2268,7 @@ function attachHandleDrag(handle, feature, handleType) {
 
     function onMove(ev) {
       ev.preventDefault();
+      setPlanModeHint(handleType === "start" ? "Moving door/window start along the wall" : "Resizing door/window width", "feature");
       const pos = getPointerPosition(ev);
       const deltaAlongWall = (pos.x - startPoint.x) * edge.ux + (pos.y - startPoint.y) * edge.uy;
 
@@ -1780,6 +2297,7 @@ function attachHandleDrag(handle, feature, handleType) {
 
     function onUp(ev) {
       ev.preventDefault();
+      setPlanModeHint("Selected door/window: drag white handle to move, blue handle to resize", "feature");
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
@@ -1799,20 +2317,18 @@ function createFeatureHandles(feature) {
   if (!endpoints) return;
 
   featureHandleStart = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  featureHandleStart.classList.add("feature-handle", "feature-handle-start");
   featureHandleStart.setAttribute("cx", endpoints.start.x);
   featureHandleStart.setAttribute("cy", endpoints.start.y);
-  featureHandleStart.setAttribute("r", 4);
-  featureHandleStart.setAttribute("fill", "#ffffff");
-  featureHandleStart.setAttribute("stroke", "#000000");
+  featureHandleStart.setAttribute("r", 7);
   featureHandleStart.style.cursor = "move";
 
   featureHandleEnd = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  featureHandleEnd.classList.add("feature-handle", "feature-handle-end");
   featureHandleEnd.setAttribute("cx", endpoints.end.x);
   featureHandleEnd.setAttribute("cy", endpoints.end.y);
-  featureHandleEnd.setAttribute("r", 4);
-  featureHandleEnd.setAttribute("fill", "#ffffff");
-  featureHandleEnd.setAttribute("stroke", "#000000");
-  featureHandleEnd.style.cursor = "nwse-resize";
+  featureHandleEnd.setAttribute("r", 7);
+  featureHandleEnd.style.cursor = "ew-resize";
 
   svg.appendChild(featureHandleStart);
   svg.appendChild(featureHandleEnd);
@@ -1987,6 +2503,15 @@ function applySnapping(rect, proposedX, proposedY) {
 // -----------------------------------------
 // Pointer events (rooms + features)
 // -----------------------------------------
+svg.addEventListener("dblclick", (evt) => {
+  const target = evt.target;
+  if (isRoomElement(target) && currentTool === "select") {
+    openSizeEditorForRoom(target.dataset.room);
+    evt.preventDefault();
+    evt.stopPropagation();
+  }
+});
+
 svg.addEventListener("pointerdown", (evt) => {
   const target = evt.target;
 
@@ -2032,6 +2557,7 @@ svg.addEventListener("pointerdown", (evt) => {
   if (isRoomRect && (currentTool === "addDoor" || currentTool === "addWindow")) {
     const pos = getPointerPosition(evt);
     createFeatureOnRoom(target, currentTool === "addDoor" ? "door" : "window", pos);
+    setTool("select");
     evt.preventDefault();
     return;
   }
@@ -2072,6 +2598,8 @@ svg.addEventListener("pointermove", (evt) => {
   const isRoomRect = isRoomElement(target);
   if (!isRoomRect) {
     svg.style.cursor = "";
+    clearRoomHoverClasses();
+    if (!selectedFeature) setPlanModeHint("Select: drag room body to move, drag blue corner/edge to resize", "select");
     return;
   }
 
@@ -2085,8 +2613,15 @@ svg.addEventListener("pointermove", (evt) => {
   const hoverMode = lockSizes ? "move" : nearRight || nearBottom ? "resize" : "move";
   svg.style.cursor = hoverMode === "resize" ? "nwse-resize" : "move";
 
+  clearRoomHoverClasses();
   target.classList.toggle("room-hover-resize", hoverMode === "resize");
   target.classList.toggle("room-hover-move", hoverMode === "move");
+  setPlanModeHint(
+    hoverMode === "resize"
+      ? "RESIZE ROOM: drag this blue corner/edge"
+      : "MOVE ROOM: drag the room body",
+    hoverMode === "resize" ? "resize" : "move"
+  );
 });
 
 svg.addEventListener("pointermove", (evt) => {
@@ -2098,6 +2633,7 @@ svg.addEventListener("pointermove", (evt) => {
 
   if (dragMode === "move") {
     svg.style.cursor = "move";
+    setPlanModeHint("Moving room", "move");
 
     const proposedX = startRect.x + dx;
     const proposedY = startRect.y + dy;
@@ -2113,6 +2649,7 @@ svg.addEventListener("pointermove", (evt) => {
     requestAutoSave?.("move room");
   } else if (dragMode === "resize") {
     svg.style.cursor = "nwse-resize";
+    setPlanModeHint("Resizing room", "resize");
     let newW = startRect.w + dx;
     let newH = startRect.h + dy;
 
@@ -2141,6 +2678,7 @@ function endRoomDrag() {
   startPositions = [];
 
   svg.style.cursor = currentTool === "addDoor" || currentTool === "addWindow" || currentTool === "addWallPoint" ? "crosshair" : "default";
+  if (currentTool === "select") setPlanModeHint("Select: drag room body to move, drag blue corner/edge to resize", "select");
 }
 
 svg.addEventListener("pointerup", endRoomDrag);
@@ -2176,7 +2714,8 @@ function buildExportSvgString(svgEl) {
 
   const clone = svgEl.cloneNode(true);
 
-  // remove editor-only handles
+  // remove background tracing image and editor-only handles
+  clone.querySelector("#planBackgroundLayer")?.remove();
   clone.querySelectorAll("circle").forEach((n) => n.remove());
 
   // remove hover/selection classes
@@ -2289,6 +2828,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // load saved state
   loadFloorplanFromLocalStorage?.();
+  installBackgroundImageControls?.();
 
   // ensure styles for all rooms/features
   svg.querySelectorAll(ROOM_SELECTOR).forEach(ensureRoomRectLooksLikeARoom);
@@ -2296,12 +2836,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // rebuild labels & events
   rebuildPlanLabelsAndBindings?.();
+  setTool("select");
 
   // install zoom after svg exists
   installPlanViewZoom?.(svg);
 
-  // deleted wall display / restore controls
+  // laser floor/wall display controls
+  bindCombineFloorsControlOnce?.();
   bindDeletedWallsControlsOnce?.();
+  bindLaserScaleControlOnce?.();
   updatePolygonPointButtonState?.();
 
   // student name input
@@ -2316,6 +2859,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // build laser view
   rebuildWallsView?.();
+
+  // Start undo/redo history after the saved plan has loaded and UI has rebuilt.
+  initFloorplanHistory?.();
 
   // material thickness listeners if present
   if (materialThicknessInput) {

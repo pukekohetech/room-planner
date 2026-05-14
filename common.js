@@ -22,6 +22,12 @@ const addRectBtn        = document.getElementById("addRectBtn");
 const addPolygonRoomBtn = document.getElementById("addPolygonRoomBtn");
 const polygonSidesInput = document.getElementById("polygonSidesInput");
 const addWallPointBtn = document.getElementById("addWallPointBtn");
+const importBackgroundBtn = document.getElementById("importBackgroundBtn");
+const backgroundImageInput = document.getElementById("backgroundImageInput");
+const pasteBackgroundBtn = document.getElementById("pasteBackgroundBtn");
+const editBackgroundChk = document.getElementById("editBackgroundChk");
+const backgroundOpacityInput = document.getElementById("backgroundOpacityInput");
+const clearBackgroundBtn = document.getElementById("clearBackgroundBtn");
 const addDoorBtn        = document.getElementById("addDoorBtn");
 const addWindowBtn      = document.getElementById("addWindowBtn");
 const downloadSheetsBtn = document.getElementById("downloadSheetsBtn");
@@ -44,6 +50,7 @@ const cornerCutTrInput = document.getElementById("cornerCutTrInput");
 const cornerCutBrInput = document.getElementById("cornerCutBrInput");
 const cornerCutBlInput = document.getElementById("cornerCutBlInput");
 const roomRotationInput = document.getElementById("roomRotationInput");
+const combineFloorsChk = document.getElementById("combineFloorsChk");
 const showDeletedWallsChk = document.getElementById("showDeletedWallsChk");
 const restoreDeletedWallsBtn = document.getElementById("restoreDeletedWallsBtn");
 const applySizeBtn  = document.getElementById("applySizeBtn");
@@ -55,13 +62,21 @@ const featureInfo        = document.getElementById("featureInfo");
 const featureTypeLabel   = document.getElementById("featureTypeLabel");
 const featureWidthInput  = document.getElementById("featureWidthInput");
 const featureOffsetInput = document.getElementById("featureOffsetInput");
-const featureHeadInput   = document.getElementById("featureHeadInput");
+const featureHeadInput   = document.getElementById("featureHeadInput"); // legacy hidden top/head field
+const featureStartHeightInput = document.getElementById("featureStartHeightInput");
+const featureEndHeightInput   = document.getElementById("featureEndHeightInput");
+const featureDoorHeightInput  = document.getElementById("featureDoorHeightInput");
+const windowHeightFields      = document.getElementById("windowHeightFields");
+const doorHeightFields        = document.getElementById("doorHeightFields");
 const deleteFeatureBtn   = document.getElementById("deleteFeatureBtn");
 
 // Walls view
 const wallsSvg               = document.getElementById("wallsSvg");
 const wallHeightInput        = document.getElementById("wallHeightInput");
 const materialThicknessInput = document.getElementById("materialThicknessInput");
+const laserScaleInput        = document.getElementById("laserScaleInput");
+const laserBedWidthInput     = document.getElementById("laserBedWidthInput");
+const laserBedHeightInput    = document.getElementById("laserBedHeightInput");
 
 // ==========================================================
 // CONSTANTS
@@ -108,12 +123,145 @@ let pt = null;
 
 let wallVisibility  = new Map(); // wallKey => bool
 let floorVisibility = new Map(); // roomId  => bool
+let combineFloors = false; // laser floor option: one attached/combined floor outline
+let laserScaleDenominator = 50; // laser output scale: real size divided by this number
+let laserBedWidthMm = LASER_WIDTH; // editable laser bed width, default 730mm
+let laserBedHeightMm = LASER_HEIGHT; // editable laser bed height, default 420mm
 let showDeletedWalls = false; // show faded/deleted wall placeholders in the laser view
+let backgroundImageState = null; // optional tracing image under the plan: { href, x, y, width, height, opacity }
+let backgroundEditMode = false; // when true, background image can be moved/resized
 
 let currentStudentName = ""; // set from UI input
 
 // Prevent autosave from overwriting storage while we clear/rebuild
 let _isRestoring = false;
+
+// ==========================================================
+// UNDO / REDO HISTORY
+// ==========================================================
+
+const HISTORY_LIMIT = 80;
+let _historyStack = [];
+let _historyIndex = -1;
+let _historyTimer = null;
+let _isHistoryRestoring = false;
+
+function getFloorplanHistorySnapshot() {
+  try {
+    return JSON.stringify(serializeFloorplan());
+  } catch (e) {
+    console.warn("getFloorplanHistorySnapshot failed", e);
+    return null;
+  }
+}
+
+function pushFloorplanHistory(reason = "change") {
+  if (_isRestoring || _isHistoryRestoring) return false;
+
+  const snapshot = getFloorplanHistorySnapshot();
+  if (!snapshot) return false;
+
+  if (_historyIndex >= 0 && _historyStack[_historyIndex] === snapshot) return false;
+
+  if (_historyIndex < _historyStack.length - 1) {
+    _historyStack = _historyStack.slice(0, _historyIndex + 1);
+  }
+
+  _historyStack.push(snapshot);
+  if (_historyStack.length > HISTORY_LIMIT) {
+    _historyStack.shift();
+  }
+  _historyIndex = _historyStack.length - 1;
+  return true;
+}
+
+function scheduleFloorplanHistory(reason = "change") {
+  if (_isRestoring || _isHistoryRestoring) return;
+  if (_historyTimer) clearTimeout(_historyTimer);
+  _historyTimer = setTimeout(() => {
+    _historyTimer = null;
+    pushFloorplanHistory(reason);
+  }, 250);
+}
+
+function initFloorplanHistory() {
+  if (_historyTimer) {
+    clearTimeout(_historyTimer);
+    _historyTimer = null;
+  }
+  _historyStack = [];
+  _historyIndex = -1;
+  pushFloorplanHistory("initial");
+}
+
+function restoreFloorplanHistorySnapshot(snapshot) {
+  if (!snapshot) return false;
+
+  let payload;
+  try {
+    payload = JSON.parse(snapshot);
+  } catch (e) {
+    console.warn("restoreFloorplanHistorySnapshot failed", e);
+    return false;
+  }
+
+  _isHistoryRestoring = true;
+  try {
+    restoreFloorplanFromPayload(payload);
+    saveFloorplanToLocalStorage();
+
+    // Rebind plan-side labels/events after a restore from history.
+    if (typeof rebuildPlanLabelsAndBindings === "function") rebuildPlanLabelsAndBindings();
+    if (typeof syncBackgroundDom === "function") syncBackgroundDom();
+    if (typeof syncCombineFloorsControl === "function") syncCombineFloorsControl();
+    if (typeof syncDeletedWallsControls === "function") syncDeletedWallsControls();
+    if (typeof rebuildWallsView === "function") rebuildWallsView();
+    if (typeof setTool === "function") setTool("select");
+    if (typeof closeFeatureSelection === "function") closeFeatureSelection();
+    if (typeof closeSizeEditor === "function") closeSizeEditor();
+  } finally {
+    _isHistoryRestoring = false;
+  }
+
+  return true;
+}
+
+function ensureCurrentStateIsInHistory() {
+  const snapshot = getFloorplanHistorySnapshot();
+  if (!snapshot) return false;
+  if (_historyIndex >= 0 && _historyStack[_historyIndex] === snapshot) return true;
+
+  if (_historyIndex < _historyStack.length - 1) {
+    _historyStack = _historyStack.slice(0, _historyIndex + 1);
+  }
+  _historyStack.push(snapshot);
+  if (_historyStack.length > HISTORY_LIMIT) _historyStack.shift();
+  _historyIndex = _historyStack.length - 1;
+  return true;
+}
+
+function undoFloorplan() {
+  if (_historyTimer) {
+    clearTimeout(_historyTimer);
+    _historyTimer = null;
+  }
+  ensureCurrentStateIsInHistory();
+  if (_historyIndex <= 0) return false;
+
+  _historyIndex -= 1;
+  return restoreFloorplanHistorySnapshot(_historyStack[_historyIndex]);
+}
+
+function redoFloorplan() {
+  if (_historyTimer) {
+    clearTimeout(_historyTimer);
+    _historyTimer = null;
+  }
+  if (_historyIndex < 0 || _historyIndex >= _historyStack.length - 1) return false;
+
+  _historyIndex += 1;
+  return restoreFloorplanHistorySnapshot(_historyStack[_historyIndex]);
+}
 
 // ==========================================================
 // INIT BINDING (safe if scripts load before SVG exists)
@@ -143,10 +291,11 @@ function extractTrailingInt(value) {
 function serializeFloorplan() {
   if (!ensureSvgBound()) {
     return {
-      version: 3,
+      version: 4,
       meta: { savedAt: new Date().toISOString(), studentName: currentStudentName || "" },
       counters: { nextRoomId, nextFeatureId },
-      ui: { joinedMode, currentTool, lockSizes, showDeletedWalls },
+      ui: { joinedMode, currentTool, lockSizes, combineFloors, showDeletedWalls, backgroundEditMode, laserScaleDenominator, laserBedWidthMm, laserBedHeightMm },
+      backgroundImage: backgroundImageState ? { ...backgroundImageState } : null,
       visibility: {
         wallVis: Object.fromEntries(wallVisibility.entries()),
         floorVis: Object.fromEntries(floorVisibility.entries())
@@ -222,7 +371,7 @@ function serializeFloorplan() {
     };
 
     // Dataset keys used by walls generator
-    const keysToCopy = ["side", "wallIndex", "wallOffsetPx", "lengthPx", "windowHeadM"];
+    const keysToCopy = ["side", "wallIndex", "wallOffsetPx", "lengthPx", "windowHeadM", "windowSillM", "doorHeightM", "openingStartM", "openingEndM"];
     for (const k of keysToCopy) {
       if (rect.dataset[k] != null) f.data[k] = rect.dataset[k];
     }
@@ -231,7 +380,7 @@ function serializeFloorplan() {
   });
 
   return {
-    version: 3,
+    version: 4,
     meta: {
       savedAt: new Date().toISOString(),
       studentName: currentStudentName || ""
@@ -245,8 +394,14 @@ function serializeFloorplan() {
       joinedMode,
       currentTool,
       lockSizes,
-      showDeletedWalls
+      combineFloors,
+      showDeletedWalls,
+      backgroundEditMode,
+      laserScaleDenominator,
+      laserBedWidthMm,
+      laserBedHeightMm
     },
+    backgroundImage: backgroundImageState ? { ...backgroundImageState } : null,
     visibility: {
       wallVis: Object.fromEntries(wallVisibility.entries()),
       floorVis: Object.fromEntries(floorVisibility.entries())
@@ -303,7 +458,7 @@ function recomputeNextIdsFromSvg() {
 
 function restoreFloorplanFromPayload(payload) {
   if (!ensureSvgBound()) return;
-  if (!payload || ![1, 2, 3].includes(payload.version)) return;
+  if (!payload || ![1, 2, 3, 4].includes(payload.version)) return;
 
   _isRestoring = true;
   try {
@@ -314,8 +469,18 @@ if (payload.ui) {
   joinedMode  = !!payload.ui.joinedMode;
   currentTool = payload.ui.currentTool || currentTool;
   lockSizes   = !!payload.ui.lockSizes;
+  combineFloors = !!payload.ui.combineFloors;
   showDeletedWalls = !!payload.ui.showDeletedWalls;
+  backgroundEditMode = !!payload.ui.backgroundEditMode;
+  const savedScale = parseFloat(payload.ui.laserScaleDenominator);
+  if (isFinite(savedScale) && savedScale > 0) laserScaleDenominator = savedScale;
+  const savedBedW = parseFloat(payload.ui.laserBedWidthMm);
+  const savedBedH = parseFloat(payload.ui.laserBedHeightMm);
+  if (isFinite(savedBedW) && savedBedW > 0) laserBedWidthMm = savedBedW;
+  if (isFinite(savedBedH) && savedBedH > 0) laserBedHeightMm = savedBedH;
 }
+
+    backgroundImageState = payload.backgroundImage ? { ...payload.backgroundImage } : null;
 
     // Student name
     if (typeof payload.meta?.studentName === "string") {
@@ -454,7 +619,11 @@ function resetRoomPlannerStorage() {
     "studentName",
     "joinedMode",
     "lockSizes",
-    "showDeletedWalls"
+    "combineFloors",
+    "showDeletedWalls",
+    "laserScaleDenominator",
+    "laserBedWidthMm",
+    "laserBedHeightMm"
   ];
 
   knownKeys.forEach(k => localStorage.removeItem(k));
@@ -487,16 +656,21 @@ function bindStudentNameInputOnce() {
   });
 }
 
+function syncDeletedWallsControls() {
+  if (showDeletedWallsChk) showDeletedWallsChk.checked = !!showDeletedWalls;
+  if (restoreDeletedWallsBtn) restoreDeletedWallsBtn.disabled = false;
+}
+
 function setShowDeletedWalls(value) {
   showDeletedWalls = !!value;
-  if (showDeletedWallsChk) showDeletedWallsChk.checked = showDeletedWalls;
+  syncDeletedWallsControls();
   requestAutoSave("show deleted walls");
   if (typeof rebuildWallsView === "function") rebuildWallsView();
 }
 
 function bindDeletedWallsControlsOnce() {
   if (showDeletedWallsChk) {
-    showDeletedWallsChk.checked = !!showDeletedWalls;
+    syncDeletedWallsControls();
     showDeletedWallsChk.addEventListener("change", () => {
       setShowDeletedWalls(showDeletedWallsChk.checked);
     });
@@ -511,10 +685,121 @@ function bindDeletedWallsControlsOnce() {
   }
 }
 
+function syncCombineFloorsControl() {
+  if (combineFloorsChk) combineFloorsChk.checked = !!combineFloors;
+}
+
+function setCombineFloors(value) {
+  combineFloors = !!value;
+  syncCombineFloorsControl();
+  requestAutoSave("combine floors");
+  if (typeof rebuildWallsView === "function") rebuildWallsView();
+}
+
+function bindCombineFloorsControlOnce() {
+  if (!combineFloorsChk) return;
+  syncCombineFloorsControl();
+  combineFloorsChk.addEventListener("change", () => {
+    setCombineFloors(combineFloorsChk.checked);
+  });
+}
+
 function getMaterialThicknessMm() {
   let t = parseFloat(materialThicknessInput?.value);
   if (!isFinite(t) || t < 0) t = 0;
   return t;
+}
+
+function getLaserScaleDenominator() {
+  let s = parseFloat(laserScaleInput?.value);
+  if (!isFinite(s) || s <= 0) s = laserScaleDenominator || 50;
+  if (!isFinite(s) || s <= 0) s = 50;
+  return s;
+}
+
+function getLaserBedWidthMm() {
+  let w = parseFloat(laserBedWidthInput?.value);
+  if (!isFinite(w) || w <= 0) w = laserBedWidthMm || LASER_WIDTH;
+  if (!isFinite(w) || w <= 0) w = LASER_WIDTH;
+  return w;
+}
+
+function getLaserBedHeightMm() {
+  let h = parseFloat(laserBedHeightInput?.value);
+  if (!isFinite(h) || h <= 0) h = laserBedHeightMm || LASER_HEIGHT;
+  if (!isFinite(h) || h <= 0) h = LASER_HEIGHT;
+  return h;
+}
+
+function syncLaserScaleControl() {
+  if (laserScaleInput) laserScaleInput.value = String(getLaserScaleDenominator());
+  if (laserBedWidthInput) laserBedWidthInput.value = String(getLaserBedWidthMm());
+  if (laserBedHeightInput) laserBedHeightInput.value = String(getLaserBedHeightMm());
+}
+
+function setLaserScaleDenominator(value) {
+  const s = parseFloat(value);
+  if (!isFinite(s) || s <= 0) return;
+  laserScaleDenominator = s;
+  syncLaserScaleControl();
+  requestAutoSave("laser scale");
+  if (typeof rebuildWallsView === "function") rebuildWallsView();
+}
+
+function setLaserBedSize(widthValue, heightValue) {
+  const w = parseFloat(widthValue);
+  const h = parseFloat(heightValue);
+  if (isFinite(w) && w > 0) laserBedWidthMm = w;
+  if (isFinite(h) && h > 0) laserBedHeightMm = h;
+  syncLaserScaleControl();
+  requestAutoSave("laser bed size");
+  if (typeof rebuildWallsView === "function") rebuildWallsView();
+}
+
+let _laserOutputControlsBound = false;
+function bindLaserScaleControlOnce() {
+  if (_laserOutputControlsBound) return;
+  _laserOutputControlsBound = true;
+
+  syncLaserScaleControl();
+
+  if (laserScaleInput) {
+    laserScaleInput.addEventListener("input", () => {
+      const s = parseFloat(laserScaleInput.value);
+      if (isFinite(s) && s > 0) {
+        laserScaleDenominator = s;
+        requestAutoSave("laser scale");
+        if (typeof rebuildWallsView === "function") rebuildWallsView();
+      }
+    });
+    laserScaleInput.addEventListener("change", () => setLaserScaleDenominator(laserScaleInput.value));
+  }
+
+  const onBedInput = () => {
+    const w = parseFloat(laserBedWidthInput?.value);
+    const h = parseFloat(laserBedHeightInput?.value);
+    if (isFinite(w) && w > 0) laserBedWidthMm = w;
+    if (isFinite(h) && h > 0) laserBedHeightMm = h;
+    requestAutoSave("laser bed size");
+    if (typeof rebuildWallsView === "function") rebuildWallsView();
+  };
+
+  laserBedWidthInput?.addEventListener("input", onBedInput);
+  laserBedHeightInput?.addEventListener("input", onBedInput);
+  laserBedWidthInput?.addEventListener("change", () => setLaserBedSize(laserBedWidthInput.value, laserBedHeightInput?.value));
+  laserBedHeightInput?.addEventListener("change", () => setLaserBedSize(laserBedWidthInput?.value, laserBedHeightInput.value));
+}
+
+function metresToLaserMm(metres) {
+  const m = parseFloat(metres);
+  if (!isFinite(m)) return 0;
+  return (m * 1000) / getLaserScaleDenominator();
+}
+
+function planPxToLaserMm(px) {
+  const n = parseFloat(px);
+  if (!isFinite(n)) return 0;
+  return metresToLaserMm(n * SCALE_M_PER_PX);
 }
 
 function getPointerPosition(evt) {
@@ -573,7 +858,8 @@ function attachRoomLabelEvents(textElement, roomId) {
 let _saveTimer = null;
 
 function requestAutoSave(reason = "change") {
-  if (_isRestoring) return;
+  if (_isRestoring || _isHistoryRestoring) return;
+  scheduleFloorplanHistory(reason);
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
     saveFloorplanToLocalStorage();
@@ -634,7 +920,7 @@ function installFeatureAutoSaveObserver() {
     attributeFilter: [
       "x", "y", "width", "height", "points", "transform",
       "data-wallOffsetPx", "data-lengthPx", "data-wallIndex",
-      "data-windowHeadM", "data-side",
+      "data-windowHeadM", "data-windowSillM", "data-doorHeightM", "data-openingStartM", "data-openingEndM", "data-side",
       "data-cutTlPx", "data-cutTrPx", "data-cutBrPx", "data-cutBlPx", "data-roomRotationDeg", "data-polySides",
       "data-room", "data-feature",
       // IMPORTANT: this is what makes renames autosave:
@@ -654,7 +940,9 @@ function initCommon() {
   ensureSvgBound();
   const loaded = loadFloorplanFromLocalStorage();
   bindStudentNameInputOnce();
+  bindCombineFloorsControlOnce();
   bindDeletedWallsControlsOnce();
+  bindLaserScaleControlOnce();
   installFeatureAutoSaveObserver();
   if (typeof rebuildWallsView === "function") rebuildWallsView();
   return loaded;

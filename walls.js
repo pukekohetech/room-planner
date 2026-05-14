@@ -3,10 +3,12 @@
 // ==========================================================
 
 /* global svg, wallsSvg, wallHeightInput, wallHeightM, SCALE_M_PER_PX,
-          ENABLE_FINGER_JOINTS, LASER_WIDTH, LASER_HEIGHT, joinedMode,
+          ENABLE_FINGER_JOINTS, joinedMode,
           wallVisibility, floorVisibility, currentStudentName,
           DOOR_HEIGHT_M, WINDOW_HEAD_DEFAULT_M, WINDOW_HEIGHT_DEFAULT_M,
-          getMaterialThicknessMm, getRoomDisplayName, requestAutoSave */
+          getMaterialThicknessMm, getRoomDisplayName, requestAutoSave,
+          planPxToLaserMm, metresToLaserMm, getLaserScaleDenominator,
+          getLaserBedWidthMm, getLaserBedHeightMm */
 
 // ---------- Pointer type ----------
 const IS_COARSE_POINTER =
@@ -96,7 +98,7 @@ function makeFatHitRect(x, y, w, h, floorId) {
 // ==========================================================
 // Finger-joint outline generator (single outline path)
 // ==========================================================
-function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints) {
+function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints, flipJoints = false) {
   const t = getMaterialThicknessMm?.();
 
   if (!useJoints || !ENABLE_FINGER_JOINTS || !isFinite(t) || t <= 0) {
@@ -108,9 +110,14 @@ function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints
 
   const pitch       = t;
   const innerLeftX  = wallX;
-  const outerLeftX  = wallX - t;
   const innerRightX = wallX + wallWidthPx;
-  const outerRightX = innerRightX - t;
+
+  // The two vertical ends are finger-jointed. For the wall loop to close,
+  // adjacent wall strips must alternate tab/slot at each corner. A room edge
+  // can be collected in the opposite direction after rotation/merging, so
+  // flipJoints mirrors the tab/slot pattern without moving the wall/openings.
+  const leftJointX  = flipJoints ? innerLeftX + t : innerLeftX - t;   // slot : tab
+  const rightJointX = flipJoints ? innerRightX + t : innerRightX - t; // tab  : slot
 
   const segments = [];
   let remaining = wallHeightPx;
@@ -125,15 +132,15 @@ function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints
 
   let d = `M ${innerLeftX} ${topY} L ${innerRightX} ${topY}`;
 
-  // Right side down (slots)
+  // Right side down. Normal walls have slots on the right; flipped walls have tabs.
   let y = topY;
   for (let i = 0; i < segments.length; i++) {
     const h = segments[i];
     const nextY = y + h;
-    const isTabSegment = (i % 2 === 0);
+    const isJointSegment = (i % 2 === 0);
 
-    if (isTabSegment) {
-      d += ` L ${outerRightX} ${y} L ${outerRightX} ${nextY} L ${innerRightX} ${nextY}`;
+    if (isJointSegment) {
+      d += ` L ${rightJointX} ${y} L ${rightJointX} ${nextY} L ${innerRightX} ${nextY}`;
     } else {
       d += ` L ${innerRightX} ${nextY}`;
     }
@@ -143,15 +150,15 @@ function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints
   // Bottom edge
   d += ` L ${innerLeftX} ${bottomY}`;
 
-  // Left side up (tabs)
+  // Left side up. Normal walls have tabs on the left; flipped walls have slots.
   y = bottomY;
   for (let i = segments.length - 1; i >= 0; i--) {
     const h = segments[i];
     const prevY = y - h;
-    const isTabSegment = (i % 2 === 0);
+    const isJointSegment = (i % 2 === 0);
 
-    if (isTabSegment) {
-      d += ` L ${outerLeftX} ${y} L ${outerLeftX} ${prevY} L ${innerLeftX} ${prevY}`;
+    if (isJointSegment) {
+      d += ` L ${leftJointX} ${y} L ${leftJointX} ${prevY} L ${innerLeftX} ${prevY}`;
     } else {
       d += ` L ${innerLeftX} ${prevY}`;
     }
@@ -162,14 +169,39 @@ function buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints
   return d;
 }
 
+function shouldFlipWallJoints(seg) {
+  const wall = seg?.walls?.[0];
+  if (!wall) return false;
+
+  if (seg.orientation === "h") return (wall.p2?.x ?? 0) < (wall.p1?.x ?? 0);
+  if (seg.orientation === "v") return (wall.p2?.y ?? 0) < (wall.p1?.y ?? 0);
+  if (seg.orientation === "d") return (wall.dirSign ?? 1) < 0;
+
+  return false;
+}
+
+function getWallJointOverhangs(useJoints, flipJoints) {
+  const t = getMaterialThicknessMm?.();
+  if (!useJoints || !ENABLE_FINGER_JOINTS || !isFinite(t) || t <= 0) {
+    return { left: 0, right: 0, total: 0 };
+  }
+
+  // buildWallOutlinePath draws the finger pattern outside ONE end of the
+  // wall strip. Normal walls protrude to the left of wallX; flipped walls
+  // protrude to the right of wallX + wallWidth. The laser layout must reserve
+  // this overhang or two neighbouring pieces can overlap on the SVG sheet.
+  const left = flipJoints ? 0 : t;
+  const right = flipJoints ? t : 0;
+  return { left, right, total: left + right };
+}
+
 // ==========================================================
 // Core build helpers
 // ==========================================================
 function clearWallsSvgToEmptySheet() {
   if (!wallsSvg) return;
   while (wallsSvg.firstChild) wallsSvg.removeChild(wallsSvg.firstChild);
-  wallsSvg.setAttribute("height", LASER_HEIGHT);
-  wallsSvg.setAttribute("viewBox", `0 0 ${LASER_WIDTH} ${LASER_HEIGHT}`);
+  syncWallsSvgBedSize(1);
 }
 
 function getRooms() {
@@ -256,8 +288,487 @@ function getRoomFloorLayoutPoints(roomEl) {
   return points.map((pt) => rotateWallPointAround(pt, centre, -angle));
 }
 
+function safeLaserScaleDenominator() {
+  const s = typeof getLaserScaleDenominator === "function" ? getLaserScaleDenominator() : 50;
+  return (isFinite(s) && s > 0) ? s : 50;
+}
+
+function modelMetresToLaserMm(metres) {
+  if (typeof metresToLaserMm === "function") return metresToLaserMm(metres);
+  const m = parseFloat(metres);
+  return isFinite(m) ? (m * 1000 / safeLaserScaleDenominator()) : 0;
+}
+
+function modelPlanPxToLaserMm(px) {
+  if (typeof planPxToLaserMm === "function") return planPxToLaserMm(px);
+  const n = parseFloat(px);
+  return isFinite(n) ? modelMetresToLaserMm(n * SCALE_M_PER_PX) : 0;
+}
+
+function getLaserScaleLabel() {
+  const scale = safeLaserScaleDenominator();
+  return `1:${Number.isInteger(scale) ? scale : scale.toFixed(2)}`;
+}
+
+function getActiveLaserBedWidthMm() {
+  const w = typeof getLaserBedWidthMm === "function" ? getLaserBedWidthMm() : 730;
+  return (isFinite(w) && w > 0) ? w : 730;
+}
+
+function getActiveLaserBedHeightMm() {
+  const h = typeof getLaserBedHeightMm === "function" ? getLaserBedHeightMm() : 420;
+  return (isFinite(h) && h > 0) ? h : 420;
+}
+
+function syncWallsSvgBedSize(sheetCount = 1) {
+  if (!wallsSvg) return;
+  const bedW = getActiveLaserBedWidthMm();
+  const bedH = getActiveLaserBedHeightMm();
+  const totalH = bedH * Math.max(1, sheetCount || 1);
+  wallsSvg.setAttribute("width", bedW);
+  wallsSvg.setAttribute("height", totalH);
+  wallsSvg.setAttribute("viewBox", `0 0 ${bedW} ${totalH}`);
+  wallsSvg.style.width = `${bedW}px`;
+  wallsSvg.style.minWidth = `${bedW}px`;
+  wallsSvg.style.minHeight = `${Math.min(totalH, bedH)}px`;
+}
+
+function fitLaserLabelToBox(label, boxX, boxY, boxW, boxH, opts = {}) {
+  if (!label || !isFinite(boxW) || !isFinite(boxH) || boxW <= 0 || boxH <= 0) return;
+
+  const pad = opts.padding ?? 1;
+  const maxW = Math.max(0.5, boxW - pad * 2);
+  const maxH = Math.max(0.5, boxH - pad * 2);
+  const minFont = opts.minFontSize ?? 0.75;
+  const absoluteMax = opts.maxFontSize ?? 4;
+
+  const tspans = Array.from(label.querySelectorAll("tspan"));
+  const visibleLines = tspans.filter((t) => String(t.textContent || "").trim().length > 0);
+  const lineCount = Math.max(1, visibleLines.length || tspans.length || 1);
+  const maxChars = Math.max(1, ...visibleLines.map((t) => String(t.textContent || "").length));
+
+  const heightBased = maxH / (lineCount * 1.25);
+  const widthBased = maxW / (maxChars * 0.56);
+  let fontSize = Math.min(absoluteMax, heightBased, widthBased);
+
+  if (!isFinite(fontSize) || fontSize <= 0) fontSize = minFont;
+  fontSize = Math.max(minFont, fontSize);
+
+  const cx = boxX + boxW / 2;
+  const cy = boxY + boxH / 2;
+  label.setAttribute("x", cx);
+  label.setAttribute("y", cy);
+  tspans.forEach((t) => t.setAttribute("x", cx));
+  label.style.fontSize = `${fontSize}px`;
+  label.style.display = "";
+
+  function fits() {
+    try {
+      const bb = label.getBBox();
+      return bb.width <= maxW && bb.height <= maxH;
+    } catch {
+      return true;
+    }
+  }
+
+  let guard = 0;
+  while (!fits() && fontSize > minFont && guard < 16) {
+    fontSize = Math.max(minFont, fontSize * 0.85);
+    label.style.fontSize = `${fontSize}px`;
+    guard++;
+  }
+
+  if (!fits()) {
+    // On tiny pieces, no label is safer than a label that becomes a cut-path hazard.
+    label.style.display = "none";
+    setExportFlag(label, false);
+  }
+}
+
+
+function scalePointsToLaserMm(points) {
+  return (points || []).map((pt) => ({
+    x: modelPlanPxToLaserMm(pt.x),
+    y: modelPlanPxToLaserMm(pt.y),
+  }));
+}
+
+function formatLaserCutSize(widthMm, heightMm) {
+  return (isFinite(widthMm) && isFinite(heightMm))
+    ? `${widthMm.toFixed(1)}mm x ${heightMm.toFixed(1)}mm @ ${getLaserScaleLabel()}`
+    : "";
+}
+
+
+function getInflatedFloorLayoutPoints(points, inflatePx) {
+  if (!points.length || !isFinite(inflatePx) || inflatePx <= 0) return points;
+
+  const bounds = getPointsBounds(points);
+  if (!isFinite(bounds.w) || !isFinite(bounds.h) || bounds.w <= 0 || bounds.h <= 0) return points;
+
+  // Floors need to sit under the walls, so add one material thickness on
+  // every side. Scaling from the bounding-box centre keeps rectangles,
+  // triangles, clipped-corner rooms, and custom polygons simple and stable.
+  const cx = bounds.x + bounds.w / 2;
+  const cy = bounds.y + bounds.h / 2;
+  const scaleX = (bounds.w + inflatePx * 2) / bounds.w;
+  const scaleY = (bounds.h + inflatePx * 2) / bounds.h;
+
+  return points.map((pt) => ({
+    x: cx + (pt.x - cx) * scaleX,
+    y: cy + (pt.y - cy) * scaleY,
+  }));
+}
+
 function formatWallPoints(points) {
   return points.map((pt) => `${Math.round(pt.x * 10) / 10},${Math.round(pt.y * 10) / 10}`).join(" ");
+}
+
+
+function floorPointKey(pt, places = 1) {
+  return `${fixedForKey(pt.x, places)},${fixedForKey(pt.y, places)}`;
+}
+
+function uniqueSortedNumbers(values, eps = 0.05) {
+  const sorted = values
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+
+  const out = [];
+  sorted.forEach((v) => {
+    if (!out.length || Math.abs(v - out[out.length - 1]) > eps) out.push(v);
+  });
+  return out;
+}
+
+function linePointFromT(data, t) {
+  return {
+    x: data.ux * t + data.nx * data.axis,
+    y: data.uy * t + data.ny * data.axis,
+  };
+}
+
+function makePathDFromLoops(loops) {
+  return loops
+    .filter((loop) => loop.length >= 3)
+    .map((loop) => {
+      const first = loop[0];
+      const rest = loop.slice(1).map((pt) => `L ${fixedForKey(pt.x, 2)} ${fixedForKey(pt.y, 2)}`).join(" ");
+      return `M ${fixedForKey(first.x, 2)} ${fixedForKey(first.y, 2)} ${rest} Z`;
+    })
+    .join(" ");
+}
+
+function getLoopsBounds(loops) {
+  const all = loops.flat();
+  return getPointsBounds(all);
+}
+
+function inflateLoopsFromBounds(loops, inflatePx) {
+  if (!loops.length || !isFinite(inflatePx) || inflatePx <= 0) return loops;
+
+  const bounds = getLoopsBounds(loops);
+  if (!isFinite(bounds.w) || !isFinite(bounds.h) || bounds.w <= 0 || bounds.h <= 0) return loops;
+
+  const cx = bounds.x + bounds.w / 2;
+  const cy = bounds.y + bounds.h / 2;
+  const scaleX = (bounds.w + inflatePx * 2) / bounds.w;
+  const scaleY = (bounds.h + inflatePx * 2) / bounds.h;
+
+  return loops.map((loop) => loop.map((pt) => ({
+    x: cx + (pt.x - cx) * scaleX,
+    y: cy + (pt.y - cy) * scaleY,
+  })));
+}
+
+
+function unionPointKey(pt, places = 2) {
+  return `${fixedForKey(pt.x, places)},${fixedForKey(pt.y, places)}`;
+}
+
+function cloneUnionPoint(pt) {
+  return { x: pt.x, y: pt.y };
+}
+
+function lerpUnionPoint(a, b, t) {
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+  };
+}
+
+function pointDistanceSq(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+function crossUnion(ax, ay, bx, by) {
+  return ax * by - ay * bx;
+}
+
+function dotUnion(ax, ay, bx, by) {
+  return ax * bx + ay * by;
+}
+
+function pointOnSegmentUnion(pt, a, b, eps = 0.35) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 0.000001) return false;
+
+  const cross = Math.abs(crossUnion(pt.x - a.x, pt.y - a.y, dx, dy));
+  if (cross > eps * Math.sqrt(lenSq)) return false;
+
+  const t = dotUnion(pt.x - a.x, pt.y - a.y, dx, dy) / lenSq;
+  return t >= -eps && t <= 1 + eps;
+}
+
+function segmentTForPointUnion(pt, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 0.000001) return 0;
+  return dotUnion(pt.x - a.x, pt.y - a.y, dx, dy) / lenSq;
+}
+
+function addSplitT(edge, t) {
+  if (!Number.isFinite(t)) return;
+  if (t < -0.0005 || t > 1.0005) return;
+  const clamped = Math.max(0, Math.min(1, t));
+  if (!edge.ts.some((existing) => Math.abs(existing - clamped) < 0.0005)) {
+    edge.ts.push(clamped);
+  }
+}
+
+function lineSegmentIntersectionT(e1, e2) {
+  const p = e1.a;
+  const r = { x: e1.b.x - e1.a.x, y: e1.b.y - e1.a.y };
+  const q = e2.a;
+  const s = { x: e2.b.x - e2.a.x, y: e2.b.y - e2.a.y };
+  const rxs = crossUnion(r.x, r.y, s.x, s.y);
+  const qmp = { x: q.x - p.x, y: q.y - p.y };
+  const qmpxr = crossUnion(qmp.x, qmp.y, r.x, r.y);
+
+  if (Math.abs(rxs) < 0.000001) {
+    // Parallel. If collinear, split both edges at all overlap endpoints.
+    if (Math.abs(qmpxr) > 0.35) return;
+
+    [e2.a, e2.b].forEach((pt) => {
+      if (pointOnSegmentUnion(pt, e1.a, e1.b)) addSplitT(e1, segmentTForPointUnion(pt, e1.a, e1.b));
+    });
+    [e1.a, e1.b].forEach((pt) => {
+      if (pointOnSegmentUnion(pt, e2.a, e2.b)) addSplitT(e2, segmentTForPointUnion(pt, e2.a, e2.b));
+    });
+    return;
+  }
+
+  const t = crossUnion(qmp.x, qmp.y, s.x, s.y) / rxs;
+  const u = crossUnion(qmp.x, qmp.y, r.x, r.y) / rxs;
+  const eps = 0.0005;
+  if (t >= -eps && t <= 1 + eps && u >= -eps && u <= 1 + eps) {
+    addSplitT(e1, t);
+    addSplitT(e2, u);
+  }
+}
+
+function isPointInPolygonUnion(pt, polygon) {
+  if (!polygon || polygon.length < 3) return false;
+
+  // Treat boundary as inside. The union samples are offset from boundaries,
+  // but this makes the test safer around snapped or nearly-touching rooms.
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    if (pointOnSegmentUnion(pt, a, b, 0.08)) return true;
+  }
+
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x;
+    const yi = polygon[i].y;
+    const xj = polygon[j].x;
+    const yj = polygon[j].y;
+
+    const intersects = ((yi > pt.y) !== (yj > pt.y)) &&
+      (pt.x < (xj - xi) * (pt.y - yi) / ((yj - yi) || 0.000001) + xi);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function isPointInAnyPolygonUnion(pt, polygons) {
+  return polygons.some((poly) => isPointInPolygonUnion(pt, poly));
+}
+
+function cleanUnionLoop(loop) {
+  if (!loop || loop.length < 3) return [];
+
+  // Remove repeated adjacent points.
+  const deduped = [];
+  loop.forEach((pt) => {
+    if (!deduped.length || pointDistanceSq(pt, deduped[deduped.length - 1]) > 0.01) {
+      deduped.push(pt);
+    }
+  });
+
+  if (deduped.length > 1 && pointDistanceSq(deduped[0], deduped[deduped.length - 1]) <= 0.01) {
+    deduped.pop();
+  }
+
+  // Remove points that sit exactly between two collinear neighbours.
+  const cleaned = [];
+  for (let i = 0; i < deduped.length; i++) {
+    const prev = deduped[(i - 1 + deduped.length) % deduped.length];
+    const cur = deduped[i];
+    const next = deduped[(i + 1) % deduped.length];
+    const v1 = { x: cur.x - prev.x, y: cur.y - prev.y };
+    const v2 = { x: next.x - cur.x, y: next.y - cur.y };
+    const len1 = Math.hypot(v1.x, v1.y);
+    const len2 = Math.hypot(v2.x, v2.y);
+    if (len1 < 0.01 || len2 < 0.01) continue;
+
+    const cross = Math.abs(crossUnion(v1.x, v1.y, v2.x, v2.y));
+    const sameDirection = dotUnion(v1.x, v1.y, v2.x, v2.y) > 0;
+    if (cross <= 0.05 && sameDirection) continue;
+
+    cleaned.push(cur);
+  }
+
+  return cleaned.length >= 3 ? cleaned : deduped;
+}
+
+function buildUnionBoundaryLoops(polygons) {
+  const cleanPolygons = (polygons || [])
+    .map((poly) => (poly || []).map(cloneUnionPoint))
+    .filter((poly) => poly.length >= 3);
+
+  if (!cleanPolygons.length) return [];
+
+  const edges = [];
+  cleanPolygons.forEach((poly, polyIndex) => {
+    poly.forEach((a, i) => {
+      const b = poly[(i + 1) % poly.length];
+      if (pointDistanceSq(a, b) < 0.25) return;
+      edges.push({ a: cloneUnionPoint(a), b: cloneUnionPoint(b), polyIndex, edgeIndex: i, ts: [0, 1] });
+    });
+  });
+
+  for (let i = 0; i < edges.length; i++) {
+    for (let j = i + 1; j < edges.length; j++) {
+      lineSegmentIntersectionT(edges[i], edges[j]);
+    }
+  }
+
+  const boundaryMap = new Map();
+  const sampleOffset = 0.35;
+
+  edges.forEach((edge) => {
+    edge.ts.sort((a, b) => a - b);
+
+    for (let i = 0; i < edge.ts.length - 1; i++) {
+      const t1 = edge.ts[i];
+      const t2 = edge.ts[i + 1];
+      if (t2 - t1 < 0.0005) continue;
+
+      const a = lerpUnionPoint(edge.a, edge.b, t1);
+      const b = lerpUnionPoint(edge.a, edge.b, t2);
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (!Number.isFinite(len) || len < 0.75) continue;
+
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const nx = -dy / len;
+      const ny = dx / len;
+      const left = { x: mid.x + nx * sampleOffset, y: mid.y + ny * sampleOffset };
+      const right = { x: mid.x - nx * sampleOffset, y: mid.y - ny * sampleOffset };
+
+      const leftInside = isPointInAnyPolygonUnion(left, cleanPolygons);
+      const rightInside = isPointInAnyPolygonUnion(right, cleanPolygons);
+      if (leftInside === rightInside) continue;
+
+      // Direction is chosen so the union interior sits on the left side of
+      // the segment. Internal/overlapped lines therefore disappear.
+      const start = leftInside ? a : b;
+      const end = leftInside ? b : a;
+      const key = `${unionPointKey(start)}>${unionPointKey(end)}`;
+      if (!boundaryMap.has(key)) boundaryMap.set(key, { a: start, b: end });
+    }
+  });
+
+  const boundaryEdges = Array.from(boundaryMap.values());
+  if (!boundaryEdges.length) return [];
+
+  const outgoing = new Map();
+  boundaryEdges.forEach((edge, index) => {
+    edge.index = index;
+    edge.used = false;
+    const key = unionPointKey(edge.a);
+    if (!outgoing.has(key)) outgoing.set(key, []);
+    outgoing.get(key).push(edge);
+  });
+
+  function angleOf(edge) {
+    return Math.atan2(edge.b.y - edge.a.y, edge.b.x - edge.a.x);
+  }
+
+  function chooseNextEdge(currentEdge) {
+    const key = unionPointKey(currentEdge.b);
+    const candidates = (outgoing.get(key) || []).filter((edge) => !edge.used);
+    if (!candidates.length) return null;
+    if (candidates.length === 1) return candidates[0];
+
+    const currentAngle = angleOf(currentEdge);
+    candidates.sort((a, b) => {
+      const da = Math.abs(Math.atan2(Math.sin(angleOf(a) - currentAngle), Math.cos(angleOf(a) - currentAngle)));
+      const db = Math.abs(Math.atan2(Math.sin(angleOf(b) - currentAngle), Math.cos(angleOf(b) - currentAngle)));
+      return da - db;
+    });
+    return candidates[0];
+  }
+
+  const loops = [];
+  boundaryEdges.forEach((startEdge) => {
+    if (startEdge.used) return;
+
+    const loop = [startEdge.a, startEdge.b];
+    startEdge.used = true;
+    let current = startEdge;
+    const startKey = unionPointKey(startEdge.a);
+    let guard = 0;
+
+    while (guard < boundaryEdges.length + 20) {
+      guard++;
+      if (unionPointKey(current.b) === startKey) break;
+      const next = chooseNextEdge(current);
+      if (!next) break;
+      next.used = true;
+      loop.push(next.b);
+      current = next;
+    }
+
+    if (loop.length > 1 && unionPointKey(loop[0]) === unionPointKey(loop[loop.length - 1])) {
+      loop.pop();
+    }
+
+    const cleaned = cleanUnionLoop(loop);
+    if (cleaned.length >= 3) loops.push(cleaned);
+  });
+
+  return loops;
+}
+
+function buildCombinedFloorBoundaryLoops(polygons) {
+  // Build a true union outline for the one-piece floor. The older version
+  // only removed exact shared edges, so overlapping rooms could still leave
+  // duplicate/internal laser lines. This traces only the outside boundary of
+  // all floor polygons.
+  const loops = buildUnionBoundaryLoops(polygons);
+  if (loops.length) return loops;
+
+  // Fallback for unusual self-intersecting input: keep the preview visible.
+  return (polygons || []).filter((points) => points && points.length >= 3);
 }
 
 function getWallSideName(p1, p2, bounds, index) {
@@ -365,7 +876,7 @@ function rebuildWallsView() {
   const thickness = (isFinite(t) && t > 0) ? t : 0;
   const useJoints = ENABLE_FINGER_JOINTS && thickness > 0;
 
-  const wallHeightPx = wallHeightM / SCALE_M_PER_PX;
+  const wallHeightPx = modelMetresToLaserMm(wallHeightM);
   if (!isFinite(wallHeightPx) || wallHeightPx <= 0) return;
 
   // 1) collect wall segments from rectangles and polygon rooms.
@@ -505,7 +1016,7 @@ function rebuildWallsView() {
   if (!mergedSegments.length) return;
 
   // 3) layout on sheets
-  const maxWidth   = LASER_WIDTH - 20;
+  const maxWidth   = getActiveLaserBedWidthMm() - 20;
   const gapX       = Math.max(1, thickness + 1);
   const gapY       = 8;
   const topPadding = 10;
@@ -524,19 +1035,21 @@ function rebuildWallsView() {
     cursorX = 10;
     baselineY += wallHeightPx + gapY;
 
-    if (baselineY + 5 > sheetTop + LASER_HEIGHT) {
+    if (baselineY + 5 > sheetTop + getActiveLaserBedHeightMm()) {
       sheetIndex++;
-      sheetTop = sheetIndex * LASER_HEIGHT;
+      sheetTop = sheetIndex * getActiveLaserBedHeightMm();
       markSheetUsed(sheetIndex);
       baselineY = sheetTop + topPadding + wallHeightPx;
     }
   }
 
   mergedSegments.forEach(seg => {
-    const baseWidthPx = seg.lengthPx ?? (seg.end - seg.start);
-    const wallWidthPx = baseWidthPx + thickness; // extend by 1 material thickness
-    if (!isFinite(baseWidthPx) || baseWidthPx < 1) return;
-    if (!isFinite(wallWidthPx) || wallWidthPx < 1) return;
+    const baseLengthPlanPx = seg.lengthPx ?? (seg.end - seg.start);
+    const baseWidthPx = modelPlanPxToLaserMm(baseLengthPlanPx);
+    const wallWidthPx = baseWidthPx + thickness; // extend by 1 material thickness in real cut mm
+    if (!isFinite(baseLengthPlanPx) || baseLengthPlanPx < 1) return;
+    if (!isFinite(baseWidthPx) || baseWidthPx < 0.1) return;
+    if (!isFinite(wallWidthPx) || wallWidthPx < 0.1) return;
 
     const wallKey = seg.key || [
       seg.orientation,
@@ -550,13 +1063,20 @@ function rebuildWallsView() {
 
     if (!enabled && !(typeof showDeletedWalls !== "undefined" && showDeletedWalls)) return;
 
-    if (cursorX + wallWidthPx + gapX > maxWidth) startNewRow();
+    const flipJoints = shouldFlipWallJoints(seg);
+    const jointOverhang = getWallJointOverhangs(useJoints, flipJoints);
+    const reservedWallWidth = wallWidthPx + jointOverhang.total;
 
-    const wallX = cursorX;
+    // The visible rectangular part of the wall starts at wallX, but finger
+    // joints can protrude left or right. Lay out by the full bounding width
+    // so wall ends never overlap neighbouring pieces on the laser SVG.
+    if (cursorX + reservedWallWidth + gapX > maxWidth) startNewRow();
+
+    const wallX = cursorX + jointOverhang.left;
     const wallY = baselineY - wallHeightPx;
 
     const ns = "http://www.w3.org/2000/svg";
-    const outlineD = buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints);
+    const outlineD = buildWallOutlinePath(wallX, wallY, wallWidthPx, wallHeightPx, useJoints, flipJoints);
 
     // Visible outline (export depends on enabled)
     const wallPath = document.createElementNS(ns, "path");
@@ -587,16 +1107,17 @@ function rebuildWallsView() {
     // Label (export only when enabled)
     const primary = seg.walls[0];
     const roomName = getRoomDisplayName(primary.roomId);
-    const wallLengthM = wallWidthPx * SCALE_M_PER_PX;
+    const wallLengthM = baseLengthPlanPx * SCALE_M_PER_PX;
 
     const label = document.createElementNS(ns, "text");
-    const cx = wallX + wallWidthPx / 4;
-    const cy = wallY + wallHeightPx / 4;
+    const cx = wallX + wallWidthPx / 2;
+    const cy = wallY + wallHeightPx / 2;
 
     label.setAttribute("x", cx);
     label.setAttribute("y", cy);
     label.setAttribute("text-anchor", "middle");
     label.setAttribute("font-size", "4px");
+    label.style.fontSize = "4px";
     label.setAttribute("font-family", "Arial, sans-serif");
     label.setAttribute("fill", "rgb(0,0,255)");
     label.classList.add("wall-label", enabled ? "enabled" : "disabled");
@@ -618,10 +1139,11 @@ function rebuildWallsView() {
     const sizeSpan = document.createElementNS(ns, "tspan");
     sizeSpan.setAttribute("x", cx);
     sizeSpan.setAttribute("dy", "1.1em");
-    sizeSpan.textContent = isFinite(wallLengthM) ? `${wallLengthM.toFixed(2)}m` : "";
+    sizeSpan.textContent = isFinite(wallLengthM) ? `${wallLengthM.toFixed(2)}m = ${wallWidthPx.toFixed(1)}mm @ ${getLaserScaleLabel()}` : "";
     label.appendChild(sizeSpan);
 
     wallsSvg.appendChild(label);
+    fitLaserLabelToBox(label, wallX, wallY, wallWidthPx, wallHeightPx, { maxFontSize: 4, minFontSize: 0.75, padding: 1 });
 
     // Openings (doors/windows) as rectangular holes
     // Clamp openings to BASE wall span only
@@ -637,8 +1159,6 @@ function rebuildWallsView() {
           if (indexMatches || sideMatches) openings.push({ feature: f, wall });
         });
       });
-
-      const doorHeightPxConst = DOOR_HEIGHT_M / SCALE_M_PER_PX;
 
       openings.forEach(({ feature, wall }) => {
         let offPxLocal = parseFloat(feature.dataset.wallOffsetPx);
@@ -669,34 +1189,39 @@ function rebuildWallsView() {
           }
         }
 
-        offPx = Math.max(0, Math.min(offPx, baseWidthPx));
+        offPx = Math.max(0, Math.min(offPx, baseLengthPlanPx));
         lenPx = Math.max(0, lenPx);
-        if (offPx + lenPx > baseWidthPx) lenPx = baseWidthPx - offPx;
+        if (offPx + lenPx > baseLengthPlanPx) lenPx = baseLengthPlanPx - offPx;
         if (lenPx < 1) return;
 
         const kind = feature.dataset.feature;
 
-        const holeX = wallX + offPx;
-        const holeWidth = lenPx;
+        const holeX = wallX + modelPlanPxToLaserMm(offPx);
+        const holeWidth = modelPlanPxToLaserMm(lenPx);
 
-        let holeHeight, holeY;
+        let startM = parseFloat(feature.dataset.openingStartM);
+        let endM = parseFloat(feature.dataset.openingEndM);
 
         if (kind === "door") {
-          holeHeight = doorHeightPxConst;
-          if (holeHeight > wallHeightPx * 0.95) holeHeight = wallHeightPx * 0.95;
-          holeY = baselineY - holeHeight;
+          const doorHeightM = parseFloat(feature.dataset.doorHeightM);
+          if (!isFinite(startM)) startM = 0;
+          if (!isFinite(endM)) endM = isFinite(doorHeightM) ? startM + doorHeightM : DOOR_HEIGHT_M;
         } else {
-          let headM = parseFloat(feature.dataset.windowHeadM);
-          if (!isFinite(headM)) headM = WINDOW_HEAD_DEFAULT_M;
-          if (headM > wallHeightM) headM = wallHeightM;
-
-          const headPx = headM / SCALE_M_PER_PX;
-          let winHeightPx = WINDOW_HEIGHT_DEFAULT_M / SCALE_M_PER_PX;
-          if (winHeightPx > headPx) winHeightPx = headPx;
-
-          holeHeight = winHeightPx;
-          holeY = baselineY - headPx;
+          const legacyHeadM = parseFloat(feature.dataset.windowHeadM);
+          const legacySillM = parseFloat(feature.dataset.windowSillM);
+          if (!isFinite(endM)) endM = isFinite(legacyHeadM) ? legacyHeadM : WINDOW_HEAD_DEFAULT_M;
+          if (!isFinite(startM)) startM = isFinite(legacySillM) ? legacySillM : endM - WINDOW_HEIGHT_DEFAULT_M;
         }
+
+        startM = isFinite(startM) ? Math.max(0, startM) : 0;
+        endM = isFinite(endM) ? Math.max(0.1, endM) : (kind === "door" ? DOOR_HEIGHT_M : WINDOW_HEAD_DEFAULT_M);
+        if (endM > wallHeightM) endM = wallHeightM;
+        if (startM >= endM) startM = Math.max(0, endM - 0.1);
+
+        const startPx = modelMetresToLaserMm(startM);
+        const endPx = modelMetresToLaserMm(endM);
+        const holeHeight = Math.max(1, endPx - startPx);
+        const holeY = baselineY - endPx;
 
         const holeRect = document.createElementNS(ns, "rect");
         holeRect.classList.add("hole-rect");
@@ -714,7 +1239,7 @@ function rebuildWallsView() {
       });
     }
 
-    cursorX += wallWidthPx + gapX;
+    cursorX += reservedWallWidth + gapX;
   });
 
   if (joinedMode) {
@@ -722,25 +1247,226 @@ function rebuildWallsView() {
   }
 
   const sheetCount = usedSheets.size || 1;
-  const totalHeight = LASER_HEIGHT * sheetCount;
-  wallsSvg.setAttribute("height", totalHeight);
-  wallsSvg.setAttribute("viewBox", `0 0 ${LASER_WIDTH} ${totalHeight}`);
+  syncWallsSvgBedSize(sheetCount);
 }
 
 // ==========================================================
 // Floor patch (laser pieces)
 // ==========================================================
 function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
+  if (typeof combineFloors !== "undefined" && combineFloors) {
+    addCombinedFloorPatch(lastBaselineY, usedSheets, markSheetUsed);
+    return;
+  }
+
+  addSeparateFloorPatches(lastBaselineY, usedSheets, markSheetUsed);
+}
+
+function getFloorPatchStart(lastBaselineY, markSheetUsed) {
+  const rowGap = 8;
+  const topPad = 10;
+  let sheetIndex = Math.floor(lastBaselineY / getActiveLaserBedHeightMm());
+  let sheetTop = sheetIndex * getActiveLaserBedHeightMm();
+  markSheetUsed(sheetIndex);
+
+  return {
+    sheetIndex,
+    sheetTop,
+    currentY: Math.max(lastBaselineY + rowGap, sheetTop + topPad),
+    cursorX: 10,
+    rowHeight: 0,
+    rowGap,
+    topPad,
+  };
+}
+
+
+function combinedFloorGuideSegmentKey(a, b) {
+  const aKey = floorPointKey(a, 2);
+  const bKey = floorPointKey(b, 2);
+  return aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+}
+
+function addCombinedFloorWallGuides(polygons, floorX, floorY, bounds, enabled) {
+  if (!wallsSvg || !Array.isArray(polygons) || !polygons.length) return;
+
+  const ns = "http://www.w3.org/2000/svg";
+  const guideGroup = document.createElementNS(ns, "g");
+  guideGroup.classList.add("combined-floor-wall-guides", enabled ? "enabled" : "disabled");
+  guideGroup.setAttribute("pointer-events", "none");
+  setExportFlag(guideGroup, enabled);
+
+  const seen = new Set();
+
+  polygons.forEach((poly) => {
+    if (!poly || poly.length < 2) return;
+
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      if (!a || !b) continue;
+
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (!Number.isFinite(len) || len < 0.75) continue;
+
+      // Exact shared walls appear twice, usually in opposite directions.
+      // Draw them once so the blue guide does not get over-burnt.
+      const key = combinedFloorGuideSegmentKey(a, b);
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const line = document.createElementNS(ns, "line");
+      line.setAttribute("x1", floorX + (a.x - bounds.x));
+      line.setAttribute("y1", floorY + (a.y - bounds.y));
+      line.setAttribute("x2", floorX + (b.x - bounds.x));
+      line.setAttribute("y2", floorY + (b.y - bounds.y));
+      line.setAttribute("fill", "none");
+      line.setAttribute("stroke", "rgb(0,0,255)");
+      line.setAttribute("stroke-width", "0.026");
+      line.setAttribute("stroke-linecap", "square");
+      line.setAttribute("vector-effect", "non-scaling-stroke");
+      line.classList.add("combined-floor-wall-guide", enabled ? "enabled" : "disabled");
+      setExportFlag(line, enabled);
+      guideGroup.appendChild(line);
+    }
+  });
+
+  if (guideGroup.childNodes.length) wallsSvg.appendChild(guideGroup);
+}
+
+function addCombinedFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
   const rooms = getRooms();
   if (!rooms.length) return;
 
-  const maxWidth = LASER_WIDTH - 20;
+  const polygons = rooms
+    .map((room) => scalePointsToLaserMm(getRoomFloorLayoutPoints(room)))
+    .filter((points) => points.length >= 3);
+
+  if (!polygons.length) return;
+
+  let loops = buildCombinedFloorBoundaryLoops(polygons);
+
+  // Fallback: if edge stitching fails, draw one path with each room outline as a subpath.
+  // This keeps the laser preview usable instead of failing silently.
+  if (!loops.length) loops = polygons;
+
+  const materialThicknessPx = Math.max(0, getMaterialThicknessMm?.() || 0);
+  loops = inflateLoopsFromBounds(loops, materialThicknessPx);
+
+  const bounds = getLoopsBounds(loops);
+  const wPx = bounds.w;
+  const hPx = bounds.h;
+  if (!isFinite(wPx) || !isFinite(hPx) || wPx <= 0 || hPx <= 0) return;
+
+  const maxWidth = getActiveLaserBedWidthMm() - 20;
+  const gapX = 5;
+  const state = getFloorPatchStart(lastBaselineY, markSheetUsed);
+  let { sheetIndex, sheetTop, currentY, cursorX, topPad } = state;
+
+  if (cursorX + wPx + gapX > maxWidth) {
+    cursorX = 10;
+    currentY += hPx + state.rowGap;
+  }
+
+  if (currentY + hPx + topPad > sheetTop + getActiveLaserBedHeightMm()) {
+    sheetIndex++;
+    sheetTop = sheetIndex * getActiveLaserBedHeightMm();
+    markSheetUsed(sheetIndex);
+    currentY = sheetTop + topPad;
+    cursorX = 10;
+  }
+
+  const floorX = cursorX;
+  const floorY = currentY;
+  const ns = "http://www.w3.org/2000/svg";
+  const floorId = "__combined_floor__";
+
+  if (!floorVisibility.has(floorId)) floorVisibility.set(floorId, true);
+  const enabled = !!floorVisibility.get(floorId);
+
+  const localLoops = loops.map((loop) => loop.map((pt) => ({
+    x: floorX + (pt.x - bounds.x),
+    y: floorY + (pt.y - bounds.y),
+  })));
+
+  const floorPath = document.createElementNS(ns, "path");
+  floorPath.setAttribute("d", makePathDFromLoops(localLoops));
+  floorPath.dataset.floorId = floorId;
+  floorPath.classList.add("floor-strip", "combined-floor-strip", enabled ? "enabled" : "disabled");
+  floorPath.setAttribute("fill", "none");
+  floorPath.setAttribute("stroke", "rgb(255,0,0)");
+  floorPath.setAttribute("stroke-width", "0.026");
+  setExportFlag(floorPath, enabled);
+
+  const hit = makeFatHitRect(floorX, floorY, wPx, hPx, floorId);
+  addTapHandler(hit, (e) => {
+    const id = e.currentTarget.dataset.floorId;
+    floorVisibility.set(id, !floorVisibility.get(id));
+    if (typeof requestAutoSave === "function") requestAutoSave("toggle combined floor");
+    rebuildWallsView();
+    e.stopPropagation();
+  });
+
+  wallsSvg.appendChild(floorPath);
+
+  // Blue guide lines show where each wall sits on the one-piece floor.
+  // They are exported as blue strokes so they can be engraved/marked
+  // separately from the red outside cut line.
+  addCombinedFloorWallGuides(polygons, floorX, floorY, bounds, enabled);
+
+  // Keep the transparent hit target above the guide lines for easy toggling.
+  wallsSvg.appendChild(hit);
+
+  const widthMm = wPx;
+  const heightMm = hPx;
+  const cx = floorX + wPx / 2;
+  const cy = floorY + hPx / 2;
+
+  const label = document.createElementNS(ns, "text");
+  label.setAttribute("x", cx);
+  label.setAttribute("y", cy);
+  label.setAttribute("text-anchor", "middle");
+  label.setAttribute("font-size", "4px");
+  label.setAttribute("font-family", "Arial, sans-serif");
+  label.setAttribute("fill", "rgb(0,0,255)");
+  label.classList.add("floor-label", "combined-floor-label", enabled ? "enabled" : "disabled");
+  setExportFlag(label, enabled);
+
+  const studentSpan = document.createElementNS(ns, "tspan");
+  studentSpan.setAttribute("x", cx);
+  studentSpan.setAttribute("dy", "-0.6em");
+  studentSpan.textContent = currentStudentName ? `PHS ${currentStudentName}` : "";
+  label.appendChild(studentSpan);
+
+  const nameSpan = document.createElementNS(ns, "tspan");
+  nameSpan.setAttribute("x", cx);
+  nameSpan.setAttribute("dy", "1.1em");
+  nameSpan.textContent = "Combined floor";
+  label.appendChild(nameSpan);
+
+  const sizeSpan = document.createElementNS(ns, "tspan");
+  sizeSpan.setAttribute("x", cx);
+  sizeSpan.setAttribute("dy", "1.1em");
+  sizeSpan.textContent = formatLaserCutSize(widthMm, heightMm);
+  label.appendChild(sizeSpan);
+
+  wallsSvg.appendChild(label);
+  fitLaserLabelToBox(label, floorX, floorY, wPx, hPx, { maxFontSize: 4, minFontSize: 0.75, padding: 2 });
+}
+
+function addSeparateFloorPatches(lastBaselineY, usedSheets, markSheetUsed) {
+  const rooms = getRooms();
+  if (!rooms.length) return;
+
+  const maxWidth = getActiveLaserBedWidthMm() - 20;
   const gapX     = 5;
   const rowGap   = 8;
   const topPad   = 10;
 
-  let sheetIndex = Math.floor(lastBaselineY / LASER_HEIGHT);
-  let sheetTop   = sheetIndex * LASER_HEIGHT;
+  let sheetIndex = Math.floor(lastBaselineY / getActiveLaserBedHeightMm());
+  let sheetTop   = sheetIndex * getActiveLaserBedHeightMm();
   markSheetUsed(sheetIndex);
 
   let currentY  = Math.max(lastBaselineY + rowGap, sheetTop + topPad);
@@ -748,8 +1474,12 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
   let rowHeight = 0;
 
   rooms.forEach(r => {
-    const points = getRoomFloorLayoutPoints(r);
-    if (points.length < 3) return;
+    const basePlanPoints = getRoomFloorLayoutPoints(r);
+    if (basePlanPoints.length < 3) return;
+
+    const basePoints = scalePointsToLaserMm(basePlanPoints);
+    const materialThicknessPx = Math.max(0, getMaterialThicknessMm?.() || 0);
+    const points = getInflatedFloorLayoutPoints(basePoints, materialThicknessPx);
 
     const bounds = getPointsBounds(points);
     const wPx = bounds.w;
@@ -766,9 +1496,9 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
       rowHeight = 0;
     }
 
-    if (currentY + hPx + topPad > sheetTop + LASER_HEIGHT) {
+    if (currentY + hPx + topPad > sheetTop + getActiveLaserBedHeightMm()) {
       sheetIndex++;
-      sheetTop   = sheetIndex * LASER_HEIGHT;
+      sheetTop   = sheetIndex * getActiveLaserBedHeightMm();
       markSheetUsed(sheetIndex);
       currentY   = sheetTop + topPad;
       cursorX    = 10;
@@ -818,8 +1548,8 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
     wallsSvg.appendChild(hit);
 
     // Label (export only when enabled)
-    const widthM  = wPx * SCALE_M_PER_PX;
-    const heightM = hPx * SCALE_M_PER_PX;
+    const widthMm  = wPx;
+    const heightMm = hPx;
     const roomName = getRoomDisplayName(roomId);
 
     const label = document.createElementNS(ns, "text");
@@ -830,6 +1560,7 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
     label.setAttribute("y", cy);
     label.setAttribute("text-anchor", "middle");
     label.setAttribute("font-size", "4px");
+    label.style.fontSize = "4px";
     label.setAttribute("font-family", "Arial, sans-serif");
     label.setAttribute("fill", "rgb(0,0,255)");
     label.classList.add("floor-label", enabled ? "enabled" : "disabled");
@@ -850,13 +1581,11 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
     const sizeSpan = document.createElementNS(ns, "tspan");
     sizeSpan.setAttribute("x", cx);
     sizeSpan.setAttribute("dy", "1.1em");
-    sizeSpan.textContent =
-      (isFinite(widthM) && isFinite(heightM))
-        ? `${widthM.toFixed(2)}m × ${heightM.toFixed(2)}m`
-        : "";
+    sizeSpan.textContent = formatLaserCutSize(widthMm, heightMm);
     label.appendChild(sizeSpan);
 
     wallsSvg.appendChild(label);
+    fitLaserLabelToBox(label, floorX, floorY, wPx, hPx, { maxFontSize: 4, minFontSize: 0.75, padding: 2 });
 
     cursorX += wPx + gapX;
     rowHeight = Math.max(rowHeight, hPx);
@@ -869,14 +1598,14 @@ function addFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
 function buildSheetSvg(sheetIndex) {
   const ns = "http://www.w3.org/2000/svg";
 
-  const sheetTop    = sheetIndex * LASER_HEIGHT;
-  const sheetBottom = sheetTop + LASER_HEIGHT;
+  const sheetTop    = sheetIndex * getActiveLaserBedHeightMm();
+  const sheetBottom = sheetTop + getActiveLaserBedHeightMm();
 
   const sheetSvg = document.createElementNS(ns, "svg");
   sheetSvg.setAttribute("xmlns", ns);
-  sheetSvg.setAttribute("width", LASER_WIDTH);
-  sheetSvg.setAttribute("height", LASER_HEIGHT);
-  sheetSvg.setAttribute("viewBox", `0 0 ${LASER_WIDTH} ${LASER_HEIGHT}`);
+  sheetSvg.setAttribute("width", `${getActiveLaserBedWidthMm()}mm`);
+  sheetSvg.setAttribute("height", `${getActiveLaserBedHeightMm()}mm`);
+  sheetSvg.setAttribute("viewBox", `0 0 ${getActiveLaserBedWidthMm()} ${getActiveLaserBedHeightMm()}`);
 
   const g = document.createElementNS(ns, "g");
   g.setAttribute("transform", `translate(0, -${sheetTop})`);
@@ -914,8 +1643,8 @@ window.downloadAllSheetsAsSvg = function () {
 
   rebuildWallsView();
 
-  const totalHeightAttr = parseFloat(wallsSvg.getAttribute("height")) || LASER_HEIGHT;
-  const sheetCount = Math.max(1, Math.ceil(totalHeightAttr / LASER_HEIGHT));
+  const totalHeightAttr = parseFloat(wallsSvg.getAttribute("height")) || getActiveLaserBedHeightMm();
+  const sheetCount = Math.max(1, Math.ceil(totalHeightAttr / getActiveLaserBedHeightMm()));
 
   for (let i = 0; i < sheetCount; i++) {
     const sheetSvg = buildSheetSvg(i);

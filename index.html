@@ -65,6 +65,25 @@
           Add Wall Point
         </button>
 
+        <div class="background-controls">
+          <span class="toolbar-section-title">Background image</span>
+          <input id="backgroundImageInput" type="file" accept="image/*" hidden>
+          <div class="background-button-row">
+            <button id="importBackgroundBtn" type="button">Import image</button>
+            <button id="pasteBackgroundBtn" type="button">Paste image</button>
+          </div>
+          <label class="background-toggle-label">
+            <input id="editBackgroundChk" type="checkbox">
+            Move/resize background
+          </label>
+          <label class="background-opacity-label">
+            Opacity
+            <input id="backgroundOpacityInput" type="range" min="0.1" max="1" step="0.05" value="0.45">
+          </label>
+          <button id="clearBackgroundBtn" type="button" class="danger-btn">Clear background</button>
+          <p class="hint small-hint">Copy an image and press Ctrl+V, or import a photo/floor-plan to trace over.</p>
+        </div>
+
         <!-- Secondary tools -->
         <button id="addDoorBtn">
           <svg width="10" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -173,10 +192,11 @@
         </div>
 
         <div class="panel-buttons">
-          <button id="applySizeBtn" class="primary-btn">Apply</button>
-          <button id="cancelSizeBtn">Cancel</button>
+          <button id="applySizeBtn" class="primary-btn">Done</button>
+          <button id="cancelSizeBtn">Close</button>
           <button id="deleteRoomBtn" class="danger-btn">Delete room</button>
         </div>
+        <p class="hint small-hint">Room changes update immediately. Use Ctrl+Z to undo and Ctrl+Y to redo.</p>
       </div>
 
       <!-- Door/Window Editor Panel (shown when feature selected) -->
@@ -185,20 +205,42 @@
           Selected: <span id="featureTypeLabel"></span>
         </span>
 
+        <p class="hint small-hint feature-edit-hint">
+          Drag the white handle to move the start. Drag the blue handle to change the width.
+        </p>
+
         <label>
           Width (m)
           <input id="featureWidthInput" type="number" step="0.1" min="0.1">
         </label>
 
         <label>
-          Offset (m)
+          Offset from wall start (m)
           <input id="featureOffsetInput" type="number" step="0.1" min="0">
         </label>
 
-        <label>
-          Top (m)
-          <input id="featureHeadInput" type="number" step="0.1" min="0.1">
-        </label>
+        <div id="windowHeightFields" class="feature-height-group">
+          <span class="panel-subtitle">Window heights</span>
+          <label>
+            Start / sill height (m)
+            <input id="featureStartHeightInput" type="number" step="0.1" min="0">
+          </label>
+          <label>
+            End / top height (m)
+            <input id="featureEndHeightInput" type="number" step="0.1" min="0.1">
+          </label>
+        </div>
+
+        <div id="doorHeightFields" class="feature-height-group">
+          <span class="panel-subtitle">Door height</span>
+          <label>
+            Height (m)
+            <input id="featureDoorHeightInput" type="number" step="0.1" min="0.1">
+          </label>
+        </div>
+
+        <!-- Kept for old saved plans / compatibility. New UI uses the fields above. -->
+        <input id="featureHeadInput" type="hidden">
 
         <div class="panel-buttons">
           <button id="deleteFeatureBtn" class="danger-btn">Delete door/window</button>
@@ -210,9 +252,10 @@
       <div id="wallsHint">
         <strong>Laser layout (730mm × 420mm):</strong>
         <p>
-          Tap/click a red wall strip to delete it from the laser layout. Turn on
-          “Show deleted walls” to see and restore removed wall strips. Tap/click
-          a green floor piece to toggle whether it will be cut.
+          Tap/click a red wall strip to delete it from the laser layout. Set the
+          model scale before cutting: at 1:50, a 2.4m wall cuts as 48mm high.
+          Turn on “Show deleted walls” to see and restore removed wall strips.
+          Use “One-piece floor” to combine attached room floor panels.
         </p>
         <p class="hint">
           Labels are centred, in <span style="color:blue;">blue</span>,
@@ -231,13 +274,18 @@
 
       <!-- Main Floor Plan Canvas -->
       <div id="floorplanWrapper">
+        <div id="planModeBanner" class="plan-mode-banner">Select: drag rooms, use blue corner/edge to resize</div>
         <svg id="floorplan" width="1600" height="900" viewBox="0 0 1600 900">
           <!-- Rooms, doors, windows drawn here by plan.js -->
         </svg>
       </div>
 
       <!-- Wall Elevations & Laser Sheet Preview -->
-      <div id="wallsPanel">
+      <div id="wallsPanel" class="laser-panel">
+        <div class="laser-panel-header">
+          <h2>Laser SVG preview</h2>
+          <span class="laser-panel-subtitle">Wall elevations and floor pieces for cutting</span>
+        </div>
 
         <!-- Wall Settings & Download -->
         <div id="wallsControls">
@@ -253,7 +301,27 @@
             <input id="materialThicknessInput" type="number" step="0.5" min="1" value="4">
           </label>
 
-          <span class="hint">Laser bed: 730mm × 420mm</span>
+          <label>
+            Scale 1:
+            <input id="laserScaleInput" type="number" step="1" min="1" value="50">
+          </label>
+
+          <label>
+            Bed W (mm)
+            <input id="laserBedWidthInput" type="number" step="1" min="50" value="730">
+          </label>
+
+          <label>
+            Bed H (mm)
+            <input id="laserBedHeightInput" type="number" step="1" min="50" value="420">
+          </label>
+
+          <span class="hint">Default laser bed: 730mm × 420mm</span>
+
+          <label class="walls-toggle-label">
+            <input id="combineFloorsChk" type="checkbox">
+            One-piece floor
+          </label>
 
           <label class="walls-toggle-label">
             <input id="showDeletedWallsChk" type="checkbox">
