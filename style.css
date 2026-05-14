@@ -1112,3 +1112,30 @@ button {
   opacity: 0;
   pointer-events: none;
 }
+
+
+/* ========================================
+   v23: Project save/load controls
+   ======================================== */
+.project-file-controls {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-brand-tint);
+}
+
+.project-button-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.project-button-row button {
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 13px;
+}

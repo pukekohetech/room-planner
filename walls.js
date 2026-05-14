@@ -481,6 +481,100 @@ function inflateLoopsFromBounds(loops, inflatePx) {
   })));
 }
 
+function signedLoopArea(loop) {
+  if (!Array.isArray(loop) || loop.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return sum / 2;
+}
+
+function lineIntersectionForOffset(a1, a2, b1, b2) {
+  const r = { x: a2.x - a1.x, y: a2.y - a1.y };
+  const s = { x: b2.x - b1.x, y: b2.y - b1.y };
+  const denom = r.x * s.y - r.y * s.x;
+  if (Math.abs(denom) < 0.000001) return null;
+
+  const qp = { x: b1.x - a1.x, y: b1.y - a1.y };
+  const t = (qp.x * s.y - qp.y * s.x) / denom;
+  return { x: a1.x + r.x * t, y: a1.y + r.y * t };
+}
+
+function offsetLoopOutward(loop, distanceMm) {
+  if (!Array.isArray(loop) || loop.length < 3 || !isFinite(distanceMm) || distanceMm <= 0) {
+    return loop;
+  }
+
+  const area = signedLoopArea(loop);
+  if (!isFinite(area) || Math.abs(area) < 0.000001) return loop;
+
+  // SVG coordinates have Y increasing downwards. A visually clockwise loop has
+  // positive signed area. For those loops the outward normal is (dy, -dx); for
+  // visually counter-clockwise loops it is (-dy, dx). This makes the red floor
+  // cut line a true perimeter offset instead of a stretched bounding box.
+  const outwardSign = area >= 0 ? 1 : -1;
+
+  const offsetEdges = [];
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (!Number.isFinite(len) || len < 0.01) continue;
+
+    const nx = outwardSign * dy / len;
+    const ny = outwardSign * -dx / len;
+    offsetEdges.push({
+      a: { x: a.x + nx * distanceMm, y: a.y + ny * distanceMm },
+      b: { x: b.x + nx * distanceMm, y: b.y + ny * distanceMm },
+      sourceA: a,
+      sourceB: b,
+      nx,
+      ny,
+    });
+  }
+
+  if (offsetEdges.length < 3) return inflateLoopsFromBounds([loop], distanceMm)[0] || loop;
+
+  const out = [];
+  for (let i = 0; i < offsetEdges.length; i++) {
+    const prev = offsetEdges[(i - 1 + offsetEdges.length) % offsetEdges.length];
+    const cur = offsetEdges[i];
+    const hit = lineIntersectionForOffset(prev.a, prev.b, cur.a, cur.b);
+
+    if (hit && Number.isFinite(hit.x) && Number.isFinite(hit.y)) {
+      // Avoid extreme mitres on very sharp angles; bevels are more reliable on
+      // student laser-cut parts and prevent huge spikes in the SVG.
+      const corner = cur.sourceA;
+      const maxMiter = Math.max(distanceMm * 4, distanceMm + 8);
+      if (Math.hypot(hit.x - corner.x, hit.y - corner.y) <= maxMiter) {
+        out.push(hit);
+        continue;
+      }
+    }
+
+    // Fallback bevel point when offset lines are parallel or the miter is huge.
+    out.push({
+      x: cur.sourceA.x + cur.nx * distanceMm,
+      y: cur.sourceA.y + cur.ny * distanceMm,
+    });
+  }
+
+  const cleaned = cleanUnionLoop(out);
+  return cleaned.length >= 3 ? cleaned : out;
+}
+
+function offsetLoopsOutward(loops, distanceMm) {
+  if (!Array.isArray(loops) || !loops.length || !isFinite(distanceMm) || distanceMm <= 0) return loops;
+  return loops
+    .map((loop) => offsetLoopOutward(loop, distanceMm))
+    .filter((loop) => Array.isArray(loop) && loop.length >= 3);
+}
+
 
 function unionPointKey(pt, places = 2) {
   return `${fixedForKey(pt.x, places)},${fixedForKey(pt.y, places)}`;
@@ -1346,14 +1440,16 @@ function addCombinedFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
 
   if (!polygons.length) return;
 
-  let loops = buildCombinedFloorBoundaryLoops(polygons);
+  const guidePolygons = polygons;
+  let wallLoops = buildCombinedFloorBoundaryLoops(polygons);
 
   // Fallback: if edge stitching fails, draw one path with each room outline as a subpath.
   // This keeps the laser preview usable instead of failing silently.
-  if (!loops.length) loops = polygons;
+  if (!wallLoops.length) wallLoops = polygons;
 
   const materialThicknessPx = Math.max(0, getMaterialThicknessMm?.() || 0);
-  loops = inflateLoopsFromBounds(loops, materialThicknessPx);
+  let loops = offsetLoopsOutward(wallLoops, materialThicknessPx);
+  if (!loops.length) loops = inflateLoopsFromBounds(wallLoops, materialThicknessPx);
 
   const bounds = getLoopsBounds(loops);
   const wPx = bounds.w;
@@ -1414,7 +1510,7 @@ function addCombinedFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
   // Blue guide lines show where each wall sits on the one-piece floor.
   // They are exported as blue strokes so they can be engraved/marked
   // separately from the red outside cut line.
-  addCombinedFloorWallGuides(polygons, floorX, floorY, bounds, enabled);
+  addCombinedFloorWallGuides(guidePolygons, floorX, floorY, bounds, enabled);
 
   // Keep the transparent hit target above the guide lines for easy toggling.
   wallsSvg.appendChild(hit);

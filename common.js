@@ -31,6 +31,9 @@ const clearBackgroundBtn = document.getElementById("clearBackgroundBtn");
 const addDoorBtn        = document.getElementById("addDoorBtn");
 const addWindowBtn      = document.getElementById("addWindowBtn");
 const downloadSheetsBtn = document.getElementById("downloadSheetsBtn");
+const saveProjectBtn     = document.getElementById("saveProjectBtn");
+const loadProjectBtn     = document.getElementById("loadProjectBtn");
+const loadProjectInput   = document.getElementById("loadProjectInput");
 
 // NEW: student name input (optional)
 const studentNameInput  = document.getElementById("studentNameInput");
@@ -604,6 +607,180 @@ function loadFloorplanFromLocalStorage() {
 }
 
 // ==========================================================
+// PROJECT FILE SAVE / LOAD
+// ==========================================================
+
+const PROJECT_FILE_VERSION = 1;
+const PROJECT_FILE_EXTENSION = "roomplanner.json";
+
+function makeSafeFilenamePart(value, fallback = "room-planner") {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[^a-z0-9\-_ ]/gi, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+  return cleaned || fallback;
+}
+
+function buildProjectFilePayload() {
+  const floorplan = serializeFloorplan();
+  return {
+    fileType: "roomplanner-project",
+    fileVersion: PROJECT_FILE_VERSION,
+    savedAt: new Date().toISOString(),
+    app: {
+      name: "PHS Room Planner",
+      storageVersion: floorplan.version
+    },
+    floorplan
+  };
+}
+
+function downloadTextFile(text, filename, mimeType = "application/json") {
+  const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function saveProjectToFile() {
+  try {
+    const payload = buildProjectFilePayload();
+    const namePart = makeSafeFilenamePart(currentStudentName || payload.floorplan?.meta?.studentName || "room-planner");
+    const datePart = new Date().toISOString().slice(0, 10);
+    const filename = `${namePart}-${datePart}.${PROJECT_FILE_EXTENSION}`;
+    downloadTextFile(JSON.stringify(payload, null, 2), filename, "application/json");
+    saveFloorplanToLocalStorage();
+    if (typeof setPlanModeHint === "function") setPlanModeHint("Saved project file", "select");
+    return true;
+  } catch (e) {
+    console.warn("saveProjectToFile failed", e);
+    alert("Sorry, I could not save this project file.");
+    return false;
+  }
+}
+
+function unwrapProjectFilePayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+
+  // New project-file wrapper.
+  if (payload.fileType === "roomplanner-project" && payload.floorplan) {
+    return payload.floorplan;
+  }
+
+  // Also allow older direct exports or copied localStorage JSON.
+  if ([1, 2, 3, 4].includes(payload.version) && Array.isArray(payload.rooms)) {
+    return payload;
+  }
+
+  return null;
+}
+
+function afterProjectLoad() {
+  recomputeNextIdsFromSvg();
+  saveFloorplanToLocalStorage();
+
+  if (typeof rebuildPlanLabelsAndBindings === "function") rebuildPlanLabelsAndBindings();
+  if (typeof syncBackgroundDom === "function") syncBackgroundDom();
+  if (typeof syncCombineFloorsControl === "function") syncCombineFloorsControl();
+  if (typeof syncDeletedWallsControls === "function") syncDeletedWallsControls();
+  if (typeof syncLaserScaleControl === "function") syncLaserScaleControl();
+  if (typeof rebuildWallsView === "function") rebuildWallsView();
+  if (typeof setTool === "function") setTool("select");
+  if (typeof closeFeatureSelection === "function") closeFeatureSelection();
+  if (typeof closeSizeEditor === "function") closeSizeEditor();
+
+  // Start undo/redo from the loaded file, rather than mixing with the previous project.
+  if (typeof initFloorplanHistory === "function") initFloorplanHistory();
+}
+
+function loadProjectFromPayload(payload) {
+  const floorplan = unwrapProjectFilePayload(payload);
+  if (!floorplan) {
+    alert("That file does not look like a Room Planner save file.");
+    return false;
+  }
+
+  try {
+    restoreFloorplanFromPayload(floorplan);
+    afterProjectLoad();
+    if (typeof setPlanModeHint === "function") setPlanModeHint("Loaded project file", "select");
+    return true;
+  } catch (e) {
+    console.warn("loadProjectFromPayload failed", e);
+    alert("Sorry, I could not load that project file.");
+    return false;
+  }
+}
+
+async function loadProjectFromFile(file) {
+  if (!file) return false;
+
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    return loadProjectFromPayload(payload);
+  } catch (e) {
+    console.warn("loadProjectFromFile failed", e);
+    alert("Sorry, I could not read that save file. It needs to be a .roomplanner.json or JSON Room Planner file.");
+    return false;
+  }
+}
+
+function openProjectFilePicker() {
+  if (!loadProjectInput) return false;
+  loadProjectInput.value = "";
+  loadProjectInput.click();
+  return true;
+}
+
+let _projectFileControlsBound = false;
+function bindProjectFileControlsOnce() {
+  if (_projectFileControlsBound) return;
+  _projectFileControlsBound = true;
+
+  saveProjectBtn?.addEventListener("click", () => saveProjectToFile());
+  loadProjectBtn?.addEventListener("click", () => openProjectFilePicker());
+
+  loadProjectInput?.addEventListener("change", () => {
+    const file = loadProjectInput.files && loadProjectInput.files[0];
+    if (file) loadProjectFromFile(file);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    const tag = (e.target?.tagName || "").toLowerCase();
+    const isTyping = tag === "input" || tag === "textarea" || e.target?.isContentEditable;
+    const key = String(e.key || "").toLowerCase();
+    const mod = e.ctrlKey || e.metaKey;
+
+    if (!mod) return;
+
+    // Ctrl+S / Cmd+S = save Room Planner project file.
+    if (key === "s") {
+      e.preventDefault();
+      e.stopPropagation();
+      saveProjectToFile();
+      return;
+    }
+
+    // Ctrl+O / Cmd+O = load Room Planner project file.
+    // Ctrl+L is intentionally not used because browsers reserve it for the address bar.
+    if (key === "o" && !isTyping) {
+      e.preventDefault();
+      e.stopPropagation();
+      openProjectFilePicker();
+    }
+  }, true);
+}
+
+// ==========================================================
 // HELPERS USED ACROSS FILES
 // ==========================================================
 
@@ -943,6 +1120,7 @@ function initCommon() {
   bindCombineFloorsControlOnce();
   bindDeletedWallsControlsOnce();
   bindLaserScaleControlOnce();
+  bindProjectFileControlsOnce();
   installFeatureAutoSaveObserver();
   if (typeof rebuildWallsView === "function") rebuildWallsView();
   return loaded;

@@ -2845,6 +2845,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindCombineFloorsControlOnce?.();
   bindDeletedWallsControlsOnce?.();
   bindLaserScaleControlOnce?.();
+  bindProjectFileControlsOnce?.();
   updatePolygonPointButtonState?.();
 
   // student name input

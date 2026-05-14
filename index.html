@@ -34,6 +34,16 @@
       <!-- Top Toolbar: Tools and Settings -->
             <!-- Top Toolbar: Tools and Settings -->
       <div id="controls">
+        <div class="project-file-controls">
+          <span class="toolbar-section-title">Project files</span>
+          <div class="project-button-row">
+            <button id="saveProjectBtn" type="button" class="primary-btn" title="Save this project file (Ctrl+S)">Save file</button>
+            <button id="loadProjectBtn" type="button" title="Load a project file (Ctrl+O)">Load file</button>
+          </div>
+          <input id="loadProjectInput" type="file" accept=".roomplanner.json,.json,application/json" hidden>
+          <p class="hint small-hint">Ctrl+S saves. Ctrl+O loads. Files can be moved between computers.</p>
+        </div>
+
         <!-- Primary: Add Room (most used) -->
         <button id="addRectBtn" class="primary-btn">
           <svg width="10" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -196,7 +206,7 @@
           <button id="cancelSizeBtn">Close</button>
           <button id="deleteRoomBtn" class="danger-btn">Delete room</button>
         </div>
-        <p class="hint small-hint">Room changes update immediately. Use Ctrl+Z to undo and Ctrl+Y to redo.</p>
+        <p class="hint small-hint">Room changes update immediately. Use Ctrl+Z to undo, Ctrl+Y to redo, and Ctrl+S to save a project file.</p>
       </div>
 
       <!-- Door/Window Editor Panel (shown when feature selected) -->
