@@ -278,14 +278,22 @@ function getRoomFloorLayoutPoints(roomEl) {
   const points = getRoomPlanPoints(roomEl);
   if (points.length < 3) return points;
 
-  // Wall pieces should reflect the rotated room, but floor pieces do not need
-  // to be rotated on the laser bed. Rotate the floor outline back to the
-  // room's unrotated/base orientation before laying it out.
+  // Separate floor panels do not need to preserve the plan rotation on the
+  // laser bed. Rotate those panels back to their base orientation so they are
+  // easier to pack and label.
   const angle = parseFloat(roomEl?.dataset?.roomRotationDeg || "0") || 0;
   if (Math.abs(angle) < 0.001) return points;
 
   const centre = getPointsCentre(points);
   return points.map((pt) => rotateWallPointAround(pt, centre, -angle));
+}
+
+function getRoomCombinedFloorLayoutPoints(roomEl) {
+  // One-piece floors are different from separate panels: the combined floor
+  // must match the actual floor-plan placement, including rotated/angled rooms.
+  // Do NOT unrotate here, otherwise angled rooms can vanish from the merged
+  // view or appear disconnected from the blue wall guides.
+  return getRoomPlanPoints(roomEl);
 }
 
 function safeLaserScaleDenominator() {
@@ -318,6 +326,90 @@ function getActiveLaserBedWidthMm() {
 function getActiveLaserBedHeightMm() {
   const h = typeof getLaserBedHeightMm === "function" ? getLaserBedHeightMm() : 420;
   return (isFinite(h) && h > 0) ? h : 420;
+}
+
+
+// ==========================================================
+// Near-wall tolerance helpers
+// ==========================================================
+function getWallMergeTolerancePlanPx() {
+  // Treat walls that are visually almost touching as the same wall. 8 plan px
+  // is about 160 mm in the real room and about 3.2 mm on a 1:50 laser model.
+  // That is enough to forgive small dragging/snap errors without merging rooms
+  // that are clearly separated.
+  return 8;
+}
+
+function getWallMergeToleranceLaserMm() {
+  const v = modelPlanPxToLaserMm(getWallMergeTolerancePlanPx());
+  return (Number.isFinite(v) && v > 0) ? v : 3;
+}
+
+function getCombinedFloorJoinToleranceMm() {
+  // The one-piece floor should behave like a physical base plate: if two room
+  // wall guide lines are only a tiny drag/snap error apart, treat the space
+  // between them as joined rather than cutting a narrow internal slot.
+  const wallTol = getWallMergeToleranceLaserMm();
+  const material = Math.max(0, getMaterialThicknessMm?.() || 0);
+  const tol = Math.max(wallTol, material * 0.65);
+  return (Number.isFinite(tol) && tol > 0) ? Math.min(10, tol) : 3;
+}
+
+function getWallAngleToleranceRad() {
+  return 4 * Math.PI / 180;
+}
+
+function snapToTolerance(value, tolerance) {
+  if (!Number.isFinite(value) || !Number.isFinite(tolerance) || tolerance <= 0) return value;
+  return Math.round(value / tolerance) * tolerance;
+}
+
+function areDirectionsNearlyParallel(ax, ay, bx, by, angleToleranceRad = getWallAngleToleranceRad()) {
+  const adot = Math.abs(ax * bx + ay * by);
+  return adot >= Math.cos(angleToleranceRad);
+}
+
+
+function addToTolerantAxisGroup(groups, seg, tolerancePx) {
+  for (const segments of groups.values()) {
+    const base = segments[0];
+    if (!base || base.orientation !== seg.orientation) continue;
+    if (Math.abs(base.axis - seg.axis) > tolerancePx) continue;
+    // Use the first line in the group as the shared line. This makes almost
+    // coincident horizontal/vertical walls merge and prevents duplicate cuts.
+    seg.axis = base.axis;
+    segments.push(seg);
+    return;
+  }
+
+  const key = `${seg.orientation}:${groups.size}:${fixedForKey(seg.axis, 2)}`;
+  groups.set(key, [seg]);
+}
+
+function addToTolerantDiagonalGroup(groups, seg, tolerancePx) {
+  for (const segments of groups.values()) {
+    const base = segments[0];
+    if (!base || base.orientation !== "d") continue;
+    if (!areDirectionsNearlyParallel(base.ux, base.uy, seg.ux, seg.uy)) continue;
+    if (Math.abs(base.axis - seg.axis) > tolerancePx) continue;
+
+    // Project this almost-coincident wall onto the first wall's canonical line.
+    // That lets overlap/gap merging work even when a student-drawn wall is a
+    // few pixels off or a couple of degrees imperfect.
+    seg.ux = base.ux;
+    seg.uy = base.uy;
+    seg.axis = base.axis;
+    const t1 = seg.p1.x * base.ux + seg.p1.y * base.uy;
+    const t2 = seg.p2.x * base.ux + seg.p2.y * base.uy;
+    seg.start = Math.min(t1, t2);
+    seg.end = Math.max(t1, t2);
+    seg.dirSign = t2 >= t1 ? 1 : -1;
+    segments.push(seg);
+    return;
+  }
+
+  const key = `d:${groups.size}:${fixedForKey(seg.ux, 3)}:${fixedForKey(seg.uy, 3)}:${fixedForKey(seg.axis, 2)}`;
+  groups.set(key, [seg]);
 }
 
 function syncWallsSvgBedSize(sheetCount = 1) {
@@ -576,6 +668,143 @@ function offsetLoopsOutward(loops, distanceMm) {
 }
 
 
+function snapTsToClusters(values, tolerance) {
+  const sorted = values
+    .filter((item) => item && Number.isFinite(item.t))
+    .sort((a, b) => a.t - b.t);
+
+  const clusters = [];
+  sorted.forEach((item) => {
+    const last = clusters[clusters.length - 1];
+    if (!last || Math.abs(item.t - last.mean) > tolerance) {
+      clusters.push({ items: [item], sum: item.t, mean: item.t });
+    } else {
+      last.items.push(item);
+      last.sum += item.t;
+      last.mean = last.sum / last.items.length;
+    }
+  });
+
+  clusters.forEach((cluster) => {
+    if (cluster.items.length < 2) return;
+    cluster.items.forEach((item) => {
+      item.point.x = item.ux * cluster.mean + item.nx * item.axis;
+      item.point.y = item.uy * cluster.mean + item.ny * item.axis;
+    });
+  });
+}
+
+function snapAlmostTouchingRoomPolygons(roomPolygons, toleranceMm) {
+  if (!Array.isArray(roomPolygons) || !roomPolygons.length || !Number.isFinite(toleranceMm) || toleranceMm <= 0) {
+    return roomPolygons;
+  }
+
+  const angleTolerance = getWallAngleToleranceRad();
+  const snapped = roomPolygons.map((item) => ({
+    ...item,
+    points: (item.points || []).map((pt) => ({ x: pt.x, y: pt.y })),
+  }));
+
+  function getEdges() {
+    const edges = [];
+    snapped.forEach((item, polyIndex) => {
+      const pts = item.points || [];
+      if (pts.length < 3) return;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        if (!Number.isFinite(len) || len < 0.5) continue;
+
+        let ux = dx / len;
+        let uy = dy / len;
+        if (ux < -0.000001 || (Math.abs(ux) <= 0.000001 && uy < 0)) {
+          ux = -ux;
+          uy = -uy;
+        }
+        const nx = -uy;
+        const ny = ux;
+        const axis = ((a.x * nx + a.y * ny) + (b.x * nx + b.y * ny)) / 2;
+        const t1 = a.x * ux + a.y * uy;
+        const t2 = b.x * ux + b.y * uy;
+        edges.push({
+          polyIndex,
+          edgeIndex: i,
+          a,
+          b,
+          ux,
+          uy,
+          nx,
+          ny,
+          axis,
+          start: Math.min(t1, t2),
+          end: Math.max(t1, t2),
+          len,
+        });
+      }
+    });
+    return edges;
+  }
+
+  // Repeat once after the first pass so a chain of almost-aligned rooms settles
+  // onto one shared guide line instead of stopping halfway through the chain.
+  for (let pass = 0; pass < 2; pass++) {
+    const edges = getEdges();
+    for (let i = 0; i < edges.length; i++) {
+      for (let j = i + 1; j < edges.length; j++) {
+        const e1 = edges[i];
+        const e2 = edges[j];
+        if (e1.polyIndex === e2.polyIndex) continue;
+        if (!areDirectionsNearlyParallel(e1.ux, e1.uy, e2.ux, e2.uy, angleTolerance)) continue;
+
+        const axisGap = Math.abs(e1.axis - e2.axis);
+        if (axisGap > toleranceMm) continue;
+
+        const overlapOrSmallGap = Math.min(e1.end, e2.end) - Math.max(e1.start, e2.start);
+        if (overlapOrSmallGap < -toleranceMm) continue;
+
+        // Canonical shared line: direction from the longer edge, axis halfway
+        // between the two near-coincident edges.
+        const base = e1.len >= e2.len ? e1 : e2;
+        const ux = base.ux;
+        const uy = base.uy;
+        const nx = -uy;
+        const ny = ux;
+        const avgAxis = (e1.axis + e2.axis) / 2;
+
+        [e1.a, e1.b, e2.a, e2.b].forEach((pt) => {
+          const t = pt.x * ux + pt.y * uy;
+          pt.x = ux * t + nx * avgAxis;
+          pt.y = uy * t + ny * avgAxis;
+        });
+
+        // If endpoints are very close along the shared line, make them exactly
+        // the same. This closes tiny gaps that otherwise become slivers in the
+        // one-piece floor union and stray blue guide lines.
+        const endpointItems = [e1.a, e1.b, e2.a, e2.b].map((point) => ({
+          point,
+          t: point.x * ux + point.y * uy,
+          ux,
+          uy,
+          nx,
+          ny,
+          axis: avgAxis,
+        }));
+        snapTsToClusters(endpointItems, toleranceMm);
+      }
+    }
+  }
+
+  snapped.forEach((item) => {
+    item.points = cleanUnionLoop(item.points || []);
+  });
+
+  return snapped.filter((item) => item.points && item.points.length >= 3);
+}
+
+
 function unionPointKey(pt, places = 2) {
   return `${fixedForKey(pt.x, places)},${fixedForKey(pt.y, places)}`;
 }
@@ -695,6 +924,113 @@ function isPointInAnyPolygonUnion(pt, polygons) {
   return polygons.some((poly) => isPointInPolygonUnion(pt, poly));
 }
 
+function uniquePositiveNumbers(values) {
+  const out = [];
+  values
+    .filter((v) => Number.isFinite(v) && v > 0)
+    .sort((a, b) => a - b)
+    .forEach((v) => {
+      if (!out.some((existing) => Math.abs(existing - v) < 0.001)) out.push(v);
+    });
+  return out;
+}
+
+function isUnionSideFilledNearEdge(a, b, nx, ny, sideSign, polygons, joinToleranceMm) {
+  // A single sample point can miss a neighbouring room when two rooms are
+  // almost touching but not numerically identical. Test several distances and
+  // positions along the segment. If any point just to that side is inside any
+  // room polygon, treat that side as filled. This stops internal/near-shared
+  // wall divisions from becoming red cuts on the combined floor.
+  const tol = Number.isFinite(joinToleranceMm) && joinToleranceMm > 0 ? joinToleranceMm : 2;
+  const distances = uniquePositiveNumbers([
+    0.20,
+    Math.min(0.75, tol * 0.25),
+    Math.min(1.50, tol * 0.50),
+    Math.min(3.00, tol * 0.80),
+    tol + 0.20,
+  ]);
+  const along = [0.18, 0.35, 0.50, 0.65, 0.82];
+
+  for (const t of along) {
+    const base = lerpUnionPoint(a, b, t);
+    for (const d of distances) {
+      const probe = {
+        x: base.x + nx * sideSign * d,
+        y: base.y + ny * sideSign * d,
+      };
+      if (isPointInAnyPolygonUnion(probe, polygons)) return true;
+    }
+  }
+
+  return false;
+}
+
+function convexHullPoints(points) {
+  const clean = [];
+  (points || []).forEach((pt) => {
+    if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return;
+    if (!clean.some((p) => pointDistanceSq(p, pt) < 0.0001)) clean.push({ x: pt.x, y: pt.y });
+  });
+  if (clean.length < 3) return clean;
+
+  clean.sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  for (const pt of clean) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], pt) <= 0) lower.pop();
+    lower.push(pt);
+  }
+  const upper = [];
+  for (let i = clean.length - 1; i >= 0; i--) {
+    const pt = clean[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], pt) <= 0) upper.pop();
+    upper.push(pt);
+  }
+  upper.pop();
+  lower.pop();
+  return lower.concat(upper);
+}
+
+function combinedFloorLoopsLookSane(candidateLoops, sourcePolygons, extraMarginMm = 12) {
+  if (!Array.isArray(candidateLoops) || !candidateLoops.length) return false;
+  const sourcePts = (sourcePolygons || []).flat();
+  if (sourcePts.length < 3) return true;
+
+  const sourceBounds = getPointsBounds(sourcePts);
+  const loopBounds = getLoopsBounds(candidateLoops);
+  if (!Number.isFinite(loopBounds.w) || !Number.isFinite(loopBounds.h) || loopBounds.w <= 0 || loopBounds.h <= 0) return false;
+
+  const margin = Math.max(6, extraMarginMm);
+  if (loopBounds.x < sourceBounds.x - margin) return false;
+  if (loopBounds.y < sourceBounds.y - margin) return false;
+  if (loopBounds.x + loopBounds.w > sourceBounds.x + sourceBounds.w + margin) return false;
+  if (loopBounds.y + loopBounds.h > sourceBounds.y + sourceBounds.h + margin) return false;
+
+  const maxW = sourceBounds.w + margin * 2;
+  const maxH = sourceBounds.h + margin * 2;
+  return loopBounds.w <= maxW && loopBounds.h <= maxH;
+}
+
+function cleanCombinedFloorCutLoops(loops, sourcePolygons, materialThicknessMm) {
+  const margin = Math.max(10, (Number.isFinite(materialThicknessMm) ? materialThicknessMm : 0) * 4 + getCombinedFloorJoinToleranceMm() * 2);
+  const sane = (loops || [])
+    .map((loop) => cleanUnionLoop(loop))
+    .filter((loop) => loop.length >= 3 && Math.abs(signedLoopArea(loop)) > 0.1);
+
+  if (combinedFloorLoopsLookSane(sane, sourcePolygons, margin)) return sane;
+
+  // Safety fallback: never draw a broken open chain or a self-jumping loop
+  // across the laser sheet. A convex fallback is less exact, but it avoids the
+  // dangerous random red diagonals/cross-sheet cuts and keeps the job usable.
+  const hull = convexHullPoints((sourcePolygons || []).flat());
+  if (hull.length >= 3) {
+    const fallback = materialThicknessMm > 0 ? offsetLoopsOutward([hull], materialThicknessMm) : [hull];
+    if (combinedFloorLoopsLookSane(fallback, sourcePolygons, margin * 2)) return fallback;
+  }
+
+  return [];
+}
+
 function cleanUnionLoop(loop) {
   if (!loop || loop.length < 3) return [];
 
@@ -732,6 +1068,65 @@ function cleanUnionLoop(loop) {
   return cleaned.length >= 3 ? cleaned : deduped;
 }
 
+function loopCentroidPoint(loop) {
+  if (!Array.isArray(loop) || loop.length < 3) return { x: 0, y: 0 };
+
+  let twiceArea = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    const cross = a.x * b.y - b.x * a.y;
+    twiceArea += cross;
+    cx += (a.x + b.x) * cross;
+    cy += (a.y + b.y) * cross;
+  }
+
+  if (Math.abs(twiceArea) > 0.000001) {
+    return { x: cx / (3 * twiceArea), y: cy / (3 * twiceArea) };
+  }
+
+  const avg = loop.reduce((acc, pt) => ({ x: acc.x + pt.x, y: acc.y + pt.y }), { x: 0, y: 0 });
+  return { x: avg.x / loop.length, y: avg.y / loop.length };
+}
+
+function pointOnLoopBoundaryUnion(pt, loop, eps = 0.2) {
+  if (!Array.isArray(loop) || loop.length < 3) return false;
+  for (let i = 0; i < loop.length; i++) {
+    if (pointOnSegmentUnion(pt, loop[i], loop[(i + 1) % loop.length], eps)) return true;
+  }
+  return false;
+}
+
+function filterExteriorUnionLoops(loops) {
+  const cleanedLoops = (loops || [])
+    .map((loop) => cleanUnionLoop(loop))
+    .filter((loop) => loop.length >= 3 && Math.abs(signedLoopArea(loop)) > 0.1);
+
+  if (cleanedLoops.length <= 1) return cleanedLoops;
+
+  const infos = cleanedLoops.map((loop, index) => ({
+    loop,
+    index,
+    area: Math.abs(signedLoopArea(loop)),
+    point: loopCentroidPoint(loop),
+  }));
+
+  // Keep only top-level outside perimeters. Smaller loops that sit inside a
+  // larger loop are internal gaps/slivers caused by near-misaligned rooms, and
+  // should not become red laser cut paths on a one-piece floor.
+  return infos
+    .filter((info) => {
+      return !infos.some((other) => {
+        if (other.index === info.index || other.area <= info.area) return false;
+        if (pointOnLoopBoundaryUnion(info.point, other.loop, getCombinedFloorJoinToleranceMm())) return false;
+        return isPointInPolygonUnion(info.point, other.loop);
+      });
+    })
+    .map((info) => info.loop);
+}
+
 function buildUnionBoundaryLoops(polygons) {
   const cleanPolygons = (polygons || [])
     .map((poly) => (poly || []).map(cloneUnionPoint))
@@ -755,7 +1150,11 @@ function buildUnionBoundaryLoops(polygons) {
   }
 
   const boundaryMap = new Map();
-  const sampleOffset = 0.35;
+  // Sample far enough from an edge to cross tiny gaps/misalignment between
+  // rooms. If the other side is almost touching another room, it is treated
+  // as inside the combined floor, so internal wall lines do not become red
+  // floor cut-lines.
+  const sampleOffset = Math.max(0.35, getCombinedFloorJoinToleranceMm() + 0.1);
 
   edges.forEach((edge) => {
     edge.ts.sort((a, b) => a - b);
@@ -772,18 +1171,16 @@ function buildUnionBoundaryLoops(polygons) {
       const len = Math.hypot(dx, dy);
       if (!Number.isFinite(len) || len < 0.75) continue;
 
-      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       const nx = -dy / len;
       const ny = dx / len;
-      const left = { x: mid.x + nx * sampleOffset, y: mid.y + ny * sampleOffset };
-      const right = { x: mid.x - nx * sampleOffset, y: mid.y - ny * sampleOffset };
 
-      const leftInside = isPointInAnyPolygonUnion(left, cleanPolygons);
-      const rightInside = isPointInAnyPolygonUnion(right, cleanPolygons);
+      const leftInside = isUnionSideFilledNearEdge(a, b, nx, ny, 1, cleanPolygons, sampleOffset);
+      const rightInside = isUnionSideFilledNearEdge(a, b, nx, ny, -1, cleanPolygons, sampleOffset);
       if (leftInside === rightInside) continue;
 
       // Direction is chosen so the union interior sits on the left side of
-      // the segment. Internal/overlapped lines therefore disappear.
+      // the segment. Internal/overlapped/near-touching wall lines therefore
+      // disappear instead of becoming red cuts through the one-piece floor.
       const start = leftInside ? a : b;
       const end = leftInside ? b : a;
       const key = `${unionPointKey(start)}>${unionPointKey(end)}`;
@@ -791,7 +1188,63 @@ function buildUnionBoundaryLoops(polygons) {
     }
   });
 
-  const boundaryEdges = Array.from(boundaryMap.values());
+  let boundaryEdges = Array.from(boundaryMap.values());
+  if (!boundaryEdges.length) return [];
+
+  // IMPORTANT: near-touching walls and intersection math can leave endpoints
+  // that are visually the same but not numerically identical. If those are not
+  // stitched first, the final SVG path closes an unfinished chain with `Z`,
+  // which creates the strange diagonal red cut-lines through the floor. Cluster
+  // nearby boundary endpoints before tracing loops.
+  function clusterBoundaryEndpoints(edgesToCluster) {
+    const nodeTolerance = Math.max(0.25, Math.min(2.5, getCombinedFloorJoinToleranceMm() * 0.5));
+    const tolSq = nodeTolerance * nodeTolerance;
+    const clusters = [];
+
+    function getCluster(pt) {
+      let best = null;
+      let bestD = Infinity;
+      for (const cluster of clusters) {
+        const d = pointDistanceSq(pt, cluster.point);
+        if (d < bestD) {
+          bestD = d;
+          best = cluster;
+        }
+      }
+      if (best && bestD <= tolSq) {
+        best.items.push(pt);
+        best.point.x = best.items.reduce((sum, item) => sum + item.x, 0) / best.items.length;
+        best.point.y = best.items.reduce((sum, item) => sum + item.y, 0) / best.items.length;
+        return best;
+      }
+      const cluster = { point: { x: pt.x, y: pt.y }, items: [pt] };
+      clusters.push(cluster);
+      return cluster;
+    }
+
+    edgesToCluster.forEach((edge) => {
+      edge._aCluster = getCluster(edge.a);
+      edge._bCluster = getCluster(edge.b);
+    });
+
+    edgesToCluster.forEach((edge) => {
+      edge.a = { x: edge._aCluster.point.x, y: edge._aCluster.point.y };
+      edge.b = { x: edge._bCluster.point.x, y: edge._bCluster.point.y };
+      delete edge._aCluster;
+      delete edge._bCluster;
+    });
+
+    const dedup = new Map();
+    edgesToCluster.forEach((edge) => {
+      if (pointDistanceSq(edge.a, edge.b) < 0.01) return;
+      const key = `${unionPointKey(edge.a)}>${unionPointKey(edge.b)}`;
+      if (!dedup.has(key)) dedup.set(key, edge);
+    });
+
+    return Array.from(dedup.values());
+  }
+
+  boundaryEdges = clusterBoundaryEndpoints(boundaryEdges);
   if (!boundaryEdges.length) return [];
 
   const outgoing = new Map();
@@ -807,17 +1260,38 @@ function buildUnionBoundaryLoops(polygons) {
     return Math.atan2(edge.b.y - edge.a.y, edge.b.x - edge.a.x);
   }
 
-  function chooseNextEdge(currentEdge) {
+  function positiveAngleDelta(fromAngle, toAngle) {
+    let d = toAngle - fromAngle;
+    while (d < 0) d += Math.PI * 2;
+    while (d >= Math.PI * 2) d -= Math.PI * 2;
+    return d;
+  }
+
+  function chooseNextEdge(currentEdge, startKey) {
     const key = unionPointKey(currentEdge.b);
     const candidates = (outgoing.get(key) || []).filter((edge) => !edge.used);
     if (!candidates.length) return null;
     if (candidates.length === 1) return candidates[0];
 
-    const currentAngle = angleOf(currentEdge);
+    // Directed boundary edges have the floor interior on their left. For a
+    // planar edge graph, following that face means choosing the outgoing edge
+    // that is immediately clockwise from the reverse of the incoming edge.
+    // This is more reliable than picking the straightest edge, which can jump
+    // across a complex layout and leave a diagonal closing segment.
+    const reverseIncoming = Math.atan2(
+      currentEdge.a.y - currentEdge.b.y,
+      currentEdge.a.x - currentEdge.b.x
+    );
+
     candidates.sort((a, b) => {
-      const da = Math.abs(Math.atan2(Math.sin(angleOf(a) - currentAngle), Math.cos(angleOf(a) - currentAngle)));
-      const db = Math.abs(Math.atan2(Math.sin(angleOf(b) - currentAngle), Math.cos(angleOf(b) - currentAngle)));
-      return da - db;
+      const da = positiveAngleDelta(reverseIncoming, angleOf(a));
+      const db = positiveAngleDelta(reverseIncoming, angleOf(b));
+      // Prefer a candidate that closes the loop when available, otherwise use
+      // the face-following rule above.
+      const aCloses = unionPointKey(a.b) === startKey ? 1 : 0;
+      const bCloses = unionPointKey(b.b) === startKey ? 1 : 0;
+      if (aCloses !== bCloses) return bCloses - aCloses;
+      return db - da;
     });
     return candidates[0];
   }
@@ -830,27 +1304,32 @@ function buildUnionBoundaryLoops(polygons) {
     startEdge.used = true;
     let current = startEdge;
     const startKey = unionPointKey(startEdge.a);
+    let closed = unionPointKey(startEdge.b) === startKey;
     let guard = 0;
 
-    while (guard < boundaryEdges.length + 20) {
+    while (!closed && guard < boundaryEdges.length + 20) {
       guard++;
-      if (unionPointKey(current.b) === startKey) break;
-      const next = chooseNextEdge(current);
+      const next = chooseNextEdge(current, startKey);
       if (!next) break;
       next.used = true;
       loop.push(next.b);
       current = next;
+      closed = unionPointKey(current.b) === startKey;
     }
+
+    // Never export an open boundary as a closed SVG path. That was the cause
+    // of the random red diagonal lines: `Z` was closing an unfinished chain.
+    if (!closed) return;
 
     if (loop.length > 1 && unionPointKey(loop[0]) === unionPointKey(loop[loop.length - 1])) {
       loop.pop();
     }
 
     const cleaned = cleanUnionLoop(loop);
-    if (cleaned.length >= 3) loops.push(cleaned);
+    if (cleaned.length >= 3 && Math.abs(signedLoopArea(cleaned)) > 0.1) loops.push(cleaned);
   });
 
-  return loops;
+  return filterExteriorUnionLoops(loops);
 }
 
 function buildCombinedFloorBoundaryLoops(polygons) {
@@ -906,7 +1385,7 @@ function getCanonicalSegmentData(p1, p2) {
 
   const nx = -uy;
   const ny = ux;
-  const axis = p1.x * nx + p1.y * ny;
+  const axis = ((p1.x * nx + p1.y * ny) + (p2.x * nx + p2.y * ny)) / 2;
   const t1 = p1.x * ux + p1.y * uy;
   const t2 = p2.x * ux + p2.y * uy;
   const start = Math.min(t1, t2);
@@ -994,19 +1473,17 @@ function rebuildWallsView() {
       if (!isFinite(lengthPx) || lengthPx < 1) return;
 
       const side = getWallSideName(p1, p2, bounds, i);
-      const eps = 0.5;
-      const isHorizontal = Math.abs(dy) <= eps;
-      const isVertical = Math.abs(dx) <= eps;
+      const almostStraightTol = Math.min(1.5, getWallMergeTolerancePlanPx() / 4);
+      const isHorizontal = Math.abs(dy) <= almostStraightTol;
+      const isVertical = Math.abs(dx) <= almostStraightTol;
 
       if (isHorizontal || isVertical) {
         const orientation = isHorizontal ? "h" : "v";
-        const axis = isHorizontal ? p1.y : p1.x;
+        const axis = isHorizontal ? ((p1.y + p2.y) / 2) : ((p1.x + p2.x) / 2);
         const start = isHorizontal ? Math.min(p1.x, p2.x) : Math.min(p1.y, p2.y);
         const end = isHorizontal ? Math.max(p1.x, p2.x) : Math.max(p1.y, p2.y);
-        const axisKey = `${orientation}:${fixedForKey(axis, 1)}`;
 
-        if (!axisGroups.has(axisKey)) axisGroups.set(axisKey, []);
-        axisGroups.get(axisKey).push({
+        addToTolerantAxisGroup(axisGroups, {
           roomId,
           side,
           orientation,
@@ -1017,15 +1494,14 @@ function rebuildWallsView() {
           index: i,
           p1,
           p2,
-        });
+        }, getWallMergeTolerancePlanPx());
         return;
       }
 
       const canonical = getCanonicalSegmentData(p1, p2);
       if (!canonical) return;
 
-      if (!diagonalGroups.has(canonical.groupKey)) diagonalGroups.set(canonical.groupKey, []);
-      diagonalGroups.get(canonical.groupKey).push({
+      addToTolerantDiagonalGroup(diagonalGroups, {
         roomId,
         side,
         orientation: "d",
@@ -1039,13 +1515,13 @@ function rebuildWallsView() {
         ux: canonical.ux,
         uy: canonical.uy,
         dirSign: canonical.dirSign,
-      });
+      }, getWallMergeTolerancePlanPx());
     });
   });
 
   // 2) merge overlaps/touching runs on each line.
   const mergedSegments = [];
-  const eps = 0.5;
+  const eps = getWallMergeTolerancePlanPx();
 
   axisGroups.forEach((segments) => {
     segments.sort((a, b) => a.start - b.start);
@@ -1376,9 +1852,50 @@ function getFloorPatchStart(lastBaselineY, markSheetUsed) {
 
 
 function combinedFloorGuideSegmentKey(a, b) {
-  const aKey = floorPointKey(a, 2);
-  const bKey = floorPointKey(b, 2);
-  return aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+  const data = getCanonicalFloorGuideSegmentData(a, b);
+  if (!data) {
+    const aKey = floorPointKey(a, 2);
+    const bKey = floorPointKey(b, 2);
+    return aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+  }
+  return [
+    "g",
+    fixedForKey(data.ux, 3),
+    fixedForKey(data.uy, 3),
+    fixedForKey(snapToTolerance(data.axis, getWallMergeToleranceLaserMm()), 2),
+    fixedForKey(snapToTolerance(data.start, getWallMergeToleranceLaserMm()), 2),
+    fixedForKey(snapToTolerance(data.end, getWallMergeToleranceLaserMm()), 2),
+  ].join(":");
+}
+
+function getCanonicalFloorGuideSegmentData(a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (!Number.isFinite(len) || len < 0.75) return null;
+
+  let ux = dx / len;
+  let uy = dy / len;
+  if (ux < -0.000001 || (Math.abs(ux) <= 0.000001 && uy < 0)) {
+    ux = -ux;
+    uy = -uy;
+  }
+  const angleStep = getWallAngleToleranceRad();
+  let angle = Math.atan2(uy, ux);
+  angle = Math.round(angle / angleStep) * angleStep;
+  ux = Math.cos(angle);
+  uy = Math.sin(angle);
+  if (ux < -0.000001 || (Math.abs(ux) <= 0.000001 && uy < 0)) {
+    ux = -ux;
+    uy = -uy;
+  }
+
+  const nx = -uy;
+  const ny = ux;
+  const axis = ((a.x * nx + a.y * ny) + (b.x * nx + b.y * ny)) / 2;
+  const t1 = a.x * ux + a.y * uy;
+  const t2 = b.x * ux + b.y * uy;
+  return { ux, uy, axis, start: Math.min(t1, t2), end: Math.max(t1, t2) };
 }
 
 function addCombinedFloorWallGuides(polygons, floorX, floorY, bounds, enabled) {
@@ -1430,13 +1947,102 @@ function addCombinedFloorWallGuides(polygons, floorX, floorY, bounds, enabled) {
   if (guideGroup.childNodes.length) wallsSvg.appendChild(guideGroup);
 }
 
+
+function getPolygonLabelPoint(points) {
+  if (!Array.isArray(points) || points.length < 3) return getPointsCentre(points || []);
+
+  // Area-weighted centroid works well for normal rooms. If a polygon is
+  // self-crossing or degenerate, fall back to the average point.
+  let twiceArea = 0;
+  let cx = 0;
+  let cy = 0;
+
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const cross = a.x * b.y - b.x * a.y;
+    twiceArea += cross;
+    cx += (a.x + b.x) * cross;
+    cy += (a.y + b.y) * cross;
+  }
+
+  if (!Number.isFinite(twiceArea) || Math.abs(twiceArea) < 0.000001) {
+    return getPointsCentre(points);
+  }
+
+  return {
+    x: cx / (3 * twiceArea),
+    y: cy / (3 * twiceArea),
+  };
+}
+
+function addCombinedFloorRoomLabels(roomPolygons, floorX, floorY, bounds, enabled) {
+  if (!wallsSvg || !Array.isArray(roomPolygons) || !roomPolygons.length) return;
+
+  const ns = "http://www.w3.org/2000/svg";
+  const group = document.createElementNS(ns, "g");
+  group.classList.add("combined-floor-room-labels", enabled ? "enabled" : "disabled");
+  group.setAttribute("pointer-events", "none");
+  setExportFlag(group, enabled);
+
+  roomPolygons.forEach((item) => {
+    const poly = item?.points;
+    if (!poly || poly.length < 3) return;
+
+    const localPoly = poly.map((pt) => ({
+      x: floorX + (pt.x - bounds.x),
+      y: floorY + (pt.y - bounds.y),
+    }));
+
+    const roomBounds = getPointsBounds(localPoly);
+    if (!isFinite(roomBounds.w) || !isFinite(roomBounds.h) || roomBounds.w <= 0 || roomBounds.h <= 0) return;
+
+    const labelPoint = getPolygonLabelPoint(localPoly);
+    const label = document.createElementNS(ns, "text");
+    label.setAttribute("x", labelPoint.x);
+    label.setAttribute("y", labelPoint.y);
+    label.setAttribute("text-anchor", "middle");
+    label.setAttribute("dominant-baseline", "middle");
+    label.setAttribute("font-size", "4px");
+    label.style.fontSize = "4px";
+    label.setAttribute("font-family", "Arial, sans-serif");
+    label.setAttribute("fill", "rgb(0,0,255)");
+    label.classList.add("floor-label", "combined-floor-room-label", enabled ? "enabled" : "disabled");
+    label.dataset.room = item.roomId || "";
+    setExportFlag(label, enabled);
+
+    const nameSpan = document.createElementNS(ns, "tspan");
+    nameSpan.setAttribute("x", labelPoint.x);
+    nameSpan.setAttribute("dy", "0");
+    nameSpan.textContent = item.roomName || getRoomDisplayName(item.roomId) || "Room";
+    label.appendChild(nameSpan);
+
+    group.appendChild(label);
+    fitLaserLabelToBox(label, roomBounds.x, roomBounds.y, roomBounds.w, roomBounds.h, {
+      maxFontSize: 4,
+      minFontSize: 0.75,
+      padding: 1.5,
+    });
+  });
+
+  if (group.childNodes.length) wallsSvg.appendChild(group);
+}
+
 function addCombinedFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
   const rooms = getRooms();
   if (!rooms.length) return;
 
-  const polygons = rooms
-    .map((room) => scalePointsToLaserMm(getRoomFloorLayoutPoints(room)))
-    .filter((points) => points.length >= 3);
+  const rawRoomPolygons = rooms
+    .map((room) => ({
+      room,
+      roomId: room.dataset.room,
+      roomName: getRoomDisplayName(room.dataset.room),
+      points: scalePointsToLaserMm(getRoomCombinedFloorLayoutPoints(room)),
+    }))
+    .filter((item) => item.points.length >= 3);
+
+  const roomPolygons = snapAlmostTouchingRoomPolygons(rawRoomPolygons, getWallMergeToleranceLaserMm());
+  const polygons = roomPolygons.map((item) => item.points);
 
   if (!polygons.length) return;
 
@@ -1449,7 +2055,14 @@ function addCombinedFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
 
   const materialThicknessPx = Math.max(0, getMaterialThicknessMm?.() || 0);
   let loops = offsetLoopsOutward(wallLoops, materialThicknessPx);
-  if (!loops.length) loops = inflateLoopsFromBounds(wallLoops, materialThicknessPx);
+  loops = cleanCombinedFloorCutLoops(loops, polygons, materialThicknessPx);
+  if (!loops.length) {
+    const hull = convexHullPoints(polygons.flat());
+    loops = hull.length >= 3
+      ? cleanCombinedFloorCutLoops(offsetLoopsOutward([hull], materialThicknessPx), polygons, materialThicknessPx)
+      : [];
+  }
+  if (!loops.length) return;
 
   const bounds = getLoopsBounds(loops);
   const wPx = bounds.w;
@@ -1512,7 +2125,11 @@ function addCombinedFloorPatch(lastBaselineY, usedSheets, markSheetUsed) {
   // separately from the red outside cut line.
   addCombinedFloorWallGuides(guidePolygons, floorX, floorY, bounds, enabled);
 
-  // Keep the transparent hit target above the guide lines for easy toggling.
+  // Label each original room on the combined floor so the single base still
+  // has room names after export. These labels shrink/hide on tiny rooms.
+  addCombinedFloorRoomLabels(roomPolygons, floorX, floorY, bounds, enabled);
+
+  // Keep the transparent hit target above the guide lines/labels for easy toggling.
   wallsSvg.appendChild(hit);
 
   const widthMm = wPx;

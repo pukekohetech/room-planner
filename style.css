@@ -1139,3 +1139,24 @@ button {
   padding: 6px 8px;
   font-size: 13px;
 }
+
+/* ========================================
+   v29: Keep edit panels directly under Save/Load
+   ======================================== */
+#controls > #sizeEditor,
+#controls > #featureInfo {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-soft);
+  margin: 2px 0 6px;
+}
+
+#controls > #sizeEditor {
+  background: var(--surface-2);
+}
+
+#controls > #featureInfo {
+  background: var(--surface-brand-tint);
+}
