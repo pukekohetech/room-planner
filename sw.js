@@ -1,5 +1,5 @@
 // sw.js
-const CACHE_VERSION = "v1.0.31";
+const CACHE_VERSION = "v1.0.32";
 const APP_CACHE = `room-planner-${CACHE_VERSION}`;
 
 // IMPORTANT: these are paths relative to the GitHub Pages project root
